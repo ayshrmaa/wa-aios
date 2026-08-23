@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: wa-aios-api
+    runtime: node
+    plan: free
+    buildCommand: cd api && npm ci
+    startCommand: cd api && npm run migrate && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: verify-full
+      - key: DATABASE_SSL_CA
+        sync: false
+      - key: CALENDAR_PROVIDER
+        value: local
+      - key: RETELL_WEBHOOK_SECRET
+        generateValue: true
+      - key: TRUST_PROXY
+        value: true
+      - key: RATE_LIMIT_MAX
+        value: 120
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 60000

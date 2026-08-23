@@ -1,0 +1,712 @@
+{
+  "name": "WA AIOS - Retell Supporting Tools",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "check-availability",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "dbc90cdf-daf2-43ce-8abc-3ac657d2bdd3",
+      "name": "Check Availability",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1240,
+        -520
+      ],
+      "webhookId": "b14e6ea3-e40b-492f-88c3-7fc65dbc34a6"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select id, timezone, adapter_config, services\nfrom tenants where id=$1::uuid limit 1",
+        "options": {
+          "queryReplacement": "={{ [($json.body || {}).tenantId || ($json.body || {}).tenant_id || ($json.query || {}).tenantId || $env.TENANT_ID] }}"
+        }
+      },
+      "id": "ad3330ad-113c-4195-8f72-135d4306988e",
+      "name": "Load Availability Tenant Config",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1020,
+        -520
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst row = $input.first().json;\nconst request = $('Check Availability').first().json;\nconst body = request.body || {};\nconst booking = typeof row.adapter_config === 'string' ? JSON.parse(row.adapter_config) : (row.adapter_config || {});\nconst services = typeof row.services === 'string' ? JSON.parse(row.services) : (row.services || []);\nconst normalise = value => String(value || '').trim().toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst serviceKey = normalise(body.serviceId);\nconst service = services.find(s => normalise(s.id || s.name) === serviceKey || normalise(s.name) === serviceKey);\nconst staffKey = normalise(body.staffId);\nconst allStaff = booking.staff || [];\nconst candidates = staffKey\n  ? allStaff.filter(s => normalise(s.id) === staffKey || normalise(s.name) === staffKey || (s.aliases || []).some(a => normalise(a) === staffKey))\n  : allStaff;\nconst start = new Date(body.startTime);\nconst durationMinutes = Number(service?.durationMinutes || booking.defaultDurationMinutes);\nconst end = new Date(start.getTime() + durationMinutes * 60000);\nconst valid = Boolean(row.id && body.startTime && body.serviceId && service && candidates.length && !Number.isNaN(start.getTime()) && Number.isFinite(durationMinutes) && durationMinutes > 0);\nlet code = 'ok', message = 'Checking that time now.';\nif (!valid) {\n  code = !service && body.serviceId ? 'unknown_service' : (!candidates.length && body.staffId ? 'unknown_staff' : 'invalid_request');\n  message = code === 'unknown_service' ? 'I could not match that service to the salon menu.' : code === 'unknown_staff' ? 'I could not match that stylist to the salon team.' : 'Please provide a valid startTime and serviceId.';\n}\nconst rangeDays = Math.max(1, Number(booking.searchRangeDays || 10));\nconst requestedStart = Number.isNaN(start.getTime()) ? new Date().toISOString() : start.toISOString();\nconst timeMin = Number.isNaN(start.getTime()) ? new Date().toISOString() : new Date(start.getTime() - 86400000).toISOString();\nconst timeMax = Number.isNaN(start.getTime()) ? new Date().toISOString() : new Date(start.getTime() + rangeDays * 86400000).toISOString();\nreturn [{json:{\n  valid, code, message, tenantId:row.id, timezone:row.timezone || 'Europe/Zurich', booking,\n  serviceId:body.serviceId, serviceName:service?.name, durationMinutes,\n  requestedStart, requestedEnd:Number.isNaN(end.getTime()) ? null : end.toISOString(),\n  candidates:candidates.map(s => ({staffId:s.id, staffName:s.name, calendarId:s.calendarId})),\n  freeBusyRequest:{timeMin,timeMax,timeZone:row.timezone || 'Europe/Zurich',items:candidates.map(s => ({id:s.calendarId}))}\n}}];"
+      },
+      "id": "ea03408c-c391-41cb-8b73-fd7bb6efb841",
+      "name": "Prepare Availability Query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "129cb5d9-447c-4d53-833e-34429e6ffa35",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "146e3bf0-fea9-4260-8d03-5795dac18884",
+      "name": "Availability Request Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -580,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/calendar/v3/freeBusy",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.freeBusyRequest) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "afcd19ac-1d94-47d8-8319-3789eae3c6ea",
+      "name": "Check Google Calendar Free Busy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -360,
+        -620
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst ctx = $('Prepare Availability Query').first().json;\nconst response = $input.first().json || {};\nconst calendarResults = response.calendars || {};\nconst requested = new Date(ctx.requestedStart);\nconst durationMs = Number(ctx.durationMinutes) * 60000;\nconst booking = ctx.booking;\nfunction zonedToUtc(dateString, timeString, timezone) {\n  const values = dateString.split('-').map(Number), clock = timeString.split(':').map(Number);\n  const guess = new Date(Date.UTC(values[0], values[1]-1, values[2], clock[0], clock[1]));\n  const p = parts(guess, timezone);\n  const represented = Date.UTC(Number(p.year), Number(p.month)-1, Number(p.day), Number(p.hour), Number(p.minute));\n  return new Date(guess.getTime() - (represented - guess.getTime()));\n}\nfunction busyFor(staff) {\n  return (calendarResults[staff.calendarId]?.busy || []).map(period => [new Date(period.start), new Date(period.end)]);\n}\nfunction eligible(staff, start) {\n  const calendar = calendarResults[staff.calendarId];\n  if (!calendar || (calendar.errors || []).length) return false;\n  const end = new Date(start.getTime() + durationMs);\n  const p = parts(start, ctx.timezone), ep = parts(end, ctx.timezone), key = dateKey(start, ctx.timezone);\n  const startMinutes = Number(p.hour) * 60 + Number(p.minute), endMinutes = Number(ep.hour) * 60 + Number(ep.minute);\n  const windows = booking.hours?.[p.weekday.toLowerCase()] || [];\n  const inHours = key === dateKey(end, ctx.timezone) && windows.some(window => {\n    const a = window.start.split(':').map(Number), b = window.end.split(':').map(Number);\n    return startMinutes >= a[0] * 60 + a[1] && endMinutes <= b[0] * 60 + b[1];\n  });\n  const closed = (booking.closureDates || []).includes(key) || (booking.additionalHolidayDates || []).includes(key) || holidaySet(Number(p.year), booking.swissHolidayRegion).has(key);\n  const overlaps = busyFor(staff).some(([a,b]) => start < b && end > a);\n  return inHours && !closed && !overlaps && start > new Date();\n}\nfunction spoken(date) {\n  return new Intl.DateTimeFormat('en-GB', {timeZone:ctx.timezone,weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(date);\n}\nconst availableStaff = ctx.candidates.find(staff => eligible(staff, requested));\nif (availableStaff) {\n  const phrase = spoken(requested);\n  return [{json:{available:true,startTime:requested.toISOString(),endTime:new Date(requested.getTime()+durationMs).toISOString(),staffId:availableStaff.staffId,staffName:availableStaff.staffName,serviceId:ctx.serviceId,service:ctx.serviceName,message:'Yes, ' + availableStaff.staffName + ' is available on ' + phrase + ' for ' + ctx.serviceName + '.'}}];\n}\nconst slots = [];\nfor (let day = 0; day < Number(booking.searchRangeDays || 10); day++) {\n  const probe = new Date(requested.getTime() + day * 86400000);\n  const p = parts(probe, ctx.timezone), key = p.year + '-' + p.month + '-' + p.day;\n  for (const window of (booking.hours?.[p.weekday.toLowerCase()] || [])) {\n    const close = zonedToUtc(key, window.end, ctx.timezone);\n    for (let cursor = zonedToUtc(key, window.start, ctx.timezone); cursor.getTime() + durationMs <= close.getTime(); cursor = new Date(cursor.getTime() + Number(booking.slotIntervalMinutes || 30) * 60000)) {\n      for (const staff of ctx.candidates) {\n        if (eligible(staff, cursor)) slots.push({startTime:cursor.toISOString(),endTime:new Date(cursor.getTime()+durationMs).toISOString(),staffId:staff.staffId,staffName:staff.staffName,spokenTime:spoken(cursor),distance:Math.abs(cursor-requested)});\n      }\n    }\n  }\n}\nslots.sort((a,b) => a.distance-b.distance || a.startTime.localeCompare(b.startTime) || a.staffName.localeCompare(b.staffName));\nconst uniqueSlots = [];\nconst seenStarts = new Set();\nfor (const slot of slots) {\n  if (seenStarts.has(slot.startTime)) continue;\n  seenStarts.add(slot.startTime);\n  uniqueSlots.push(slot);\n}\nconst alternatives = uniqueSlots.slice(0,3).map(({distance,...slot}) => slot);\nconst message = alternatives.length\n  ? 'That time is not available. The closest options are ' + alternatives.map(slot => slot.spokenTime + ' with ' + slot.staffName).join(', ') + '.'\n  : 'That time is not available, and I could not find another opening in the next ' + Number(booking.searchRangeDays || 10) + ' days.';\nreturn [{json:{available:false,serviceId:ctx.serviceId,service:ctx.serviceName,alternatives,message}}];"
+      },
+      "id": "cf24c727-3858-47c9-86f4-d5c913b67767",
+      "name": "Choose Slot or Alternatives",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        -620
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "0e8b2a35-64d7-4f05-8866-fd2c75696742",
+      "name": "Return Availability",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        80,
+        -620
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { available:false, code:$json.code, alternatives:[], message:$json.message } }}",
+        "options": {}
+      },
+      "id": "761ad6ae-444a-4275-837f-d4d86ee1bd6c",
+      "name": "Return Availability Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -360,
+        -400
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "find-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "4fc46ab3-c229-4c8f-8fac-634a0ee166c5",
+      "name": "Find Appointment",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1240,
+        -80
+      ],
+      "webhookId": "a464a3af-0f0f-4aff-8725-42eac6d5201d"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select a.id::text as appointment_id,a.starts_at,a.ends_at,a.service,a.staff,t.timezone\nfrom appointments a join contacts c on c.id=a.contact_id join tenants t on t.id=a.tenant_id\nwhere a.tenant_id=$1::uuid\n  and regexp_replace(coalesce(c.phone_e164,''),'[^0-9]','','g')=regexp_replace(coalesce($2,''),'[^0-9]','','g')\n  and a.status='booked' and a.starts_at>now()\norder by a.starts_at",
+        "options": {
+          "queryReplacement": "={{ [($json.body || {}).tenantId || ($json.body || {}).tenant_id || ($json.query || {}).tenantId || $env.TENANT_ID, ($json.body || {}).customerPhone] }}"
+        }
+      },
+      "id": "7f25ebb8-0e05-4aea-8149-94d1959d276b",
+      "name": "Find Upcoming Appointments",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1020,
+        -80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows=$input.all().map(item=>item.json).filter(row=>row.appointment_id); const timezone=rows[0]?.timezone||'Europe/Zurich'; const spoken=date=>new Intl.DateTimeFormat('en-GB',{timeZone:timezone,weekday:'long',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(date)); const appointments=rows.map(row=>({appointmentId:row.appointment_id,startTime:row.starts_at,endTime:row.ends_at,service:row.service,staff:row.staff,spokenSummary:row.service+' with '+row.staff+' on '+spoken(row.starts_at)})); const message=appointments.length?(appointments.length===1?'I found '+appointments[0].spokenSummary+'.':'I found '+appointments.length+' upcoming appointments: '+appointments.map(a=>a.spokenSummary).join('; ')+'.'):'I could not find any upcoming appointments for that phone number.'; return [{json:{found:appointments.length>0,appointments,message}}];"
+      },
+      "id": "06d3343e-f715-46d1-870d-73a73c635c7b",
+      "name": "Format Upcoming Appointments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "a2eda6f3-0fb4-43a4-8711-81ad8c12a23f",
+      "name": "Return Upcoming Appointments",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -580,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-complaint",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "c855d0af-67d7-49c4-8b0e-e1c2ff328b70",
+      "name": "Log Complaint",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1240,
+        340
+      ],
+      "webhookId": "56bf1855-1363-4460-8e84-3441c26c9a81"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request=$input.first().json,body=request.body||{}; const allowed=new Set(['low','medium','high','urgent']); const severity=allowed.has(String(body.severity||'medium').toLowerCase())?String(body.severity||'medium').toLowerCase():'medium'; return [{json:{tenantId:body.tenantId||body.tenant_id||(request.query||{}).tenantId||$env.TENANT_ID,customerPhone:String(body.customerPhone||''),customerName:String(body.customerName||'Caller'),summary:String(body.summary||''),severity}}];"
+      },
+      "id": "dafb5408-3c0a-4ce3-8786-0da3c9791cd4",
+      "name": "Normalise Complaint",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1020,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with tenant_row as (\n  select id,review_config,messaging_config from tenants where id=$1::uuid\n), contact_row as (\n  insert into contacts(tenant_id,first_name,phone_e164,source)\n  select id,$2,nullif($3,''),'call' from tenant_row\n  on conflict(tenant_id,phone_e164) do update set first_name=excluded.first_name,updated_at=now()\n  returning id,tenant_id\n), complaint_row as (\n  insert into complaints(tenant_id,contact_id,source_channel,detected_category,severity,body)\n  select tenant_id,id,'phone','voice_complaint',$4,$5 from contact_row returning id,tenant_id,contact_id\n), event_row as (\n  insert into events(tenant_id,aggregate_type,aggregate_id,event_type,source,payload)\n  select tenant_id,'complaint',id,'complaint.created','retell',jsonb_build_object('severity',$4) from complaint_row\n)\nselect complaint_row.id::text as complaint_id,complaint_row.contact_id::text,\n       tenant_row.review_config->>'ownerAlertEmail' as owner_email,\n       coalesce(tenant_row.messaging_config->>'mode','stub') as messaging_mode\nfrom complaint_row cross join tenant_row",
+        "options": {
+          "queryReplacement": "={{ [$json.tenantId,$json.customerName,$json.customerPhone,$json.severity,$json.summary] }}"
+        }
+      },
+      "id": "428bd93b-a890-4685-8f83-d9268b2efa9a",
+      "name": "Persist Complaint Before Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -800,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const saved=$input.first().json,complaint=$('Normalise Complaint').first().json; const ownerEmail=String(saved.owner_email||''); const alertMode=saved.messaging_mode==='live'&&ownerEmail?'live':'stub'; const body='Complaint from '+complaint.customerName+' ('+complaint.customerPhone+'), severity '+complaint.severity+': '+complaint.summary; return [{json:{...saved,...complaint,ownerEmail,alertMode,alertBody:body,transportPayload:{tenantId:complaint.tenantId,channel:'email',to:ownerEmail,templateId:'owner_complaint_alert',body}}}];"
+      },
+      "id": "5aa260eb-11ff-4aa1-859c-7c86708b4741",
+      "name": "Prepare Owner Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -580,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "5c7ba80a-6ee8-4da1-8858-346da408b354",
+              "leftValue": "={{ $json.alertMode }}",
+              "rightValue": "live",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7c73b476-4d12-4033-8929-a031c8023085",
+      "name": "Owner Alert Transport Live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -360,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MESSAGING_TRANSPORT_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MESSAGING_TRANSPORT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.transportPayload) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "b0518a20-0c74-414b-8424-5e1ba13450f1",
+      "name": "Send Owner Complaint Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -140,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.warn('[WA AIOS STUB] Would alert owner about complaint:',JSON.stringify($json.transportPayload)); return $input.all().map(item=>({json:{...item.json,delivery_status:'stubbed'}}));"
+      },
+      "id": "4bf09db0-0cc7-40fc-81fb-b37e332cd4da",
+      "name": "LOUD STUB Owner Complaint Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with message_row as (\n  insert into messages(tenant_id,contact_id,channel,direction,body,template_id,delivery_status,sent_at)\n  values($1::uuid,$2::uuid,'email','outbound',$3,'owner_complaint_alert',$4,case when $4='sent' then now() else null end)\n), updated as (\n  update complaints set notified_at=case when $4='sent' then now() else notified_at end where id=$5::uuid\n)\nselect $5::text as complaint_id,$4::text as owner_alert",
+        "options": {
+          "queryReplacement": "={{ [$('Prepare Owner Alert').first().json.tenantId,$('Prepare Owner Alert').first().json.contact_id,$('Prepare Owner Alert').first().json.alertBody,$('Prepare Owner Alert').first().json.alertMode==='live'?'sent':'stubbed',$('Prepare Owner Alert').first().json.complaint_id] }}"
+        }
+      },
+      "id": "78ec26dd-3be7-406b-8627-5bdc35c76f75",
+      "name": "Record Owner Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        80,
+        340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { logged:true, complaintId:$json.complaint_id, ownerAlert:$json.owner_alert, automatedCustomerReply:false, message:$json.owner_alert==='sent'?'The complaint has been logged and the owner has been alerted.':'The complaint has been logged. The owner alert is saved but its transport still needs configuration.' } }}",
+        "options": {}
+      },
+      "id": "8268f9b3-b681-4df4-8e1a-376175e0d458",
+      "name": "Acknowledge Complaint",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        300,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-callback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "5ec14934-43e9-493b-84f5-dd85eabd8f59",
+      "name": "Log Callback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1240,
+        760
+      ],
+      "webhookId": "e3b88f9f-8b29-47d5-8e59-72b8d9ddbea6"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with contact_row as (\n  insert into contacts(tenant_id,first_name,phone_e164,source)\n  values($1::uuid,$2,nullif($3,''),'call')\n  on conflict(tenant_id,phone_e164) do update set first_name=excluded.first_name,updated_at=now()\n  returning id,tenant_id\n), event_row as (\n  insert into events(tenant_id,aggregate_type,aggregate_id,event_type,source,payload)\n  select tenant_id,'callback_request',id,'callback.requested','retell',jsonb_build_object('customerName',$2,'customerPhone',$3,'reason',$4,'requestedAt',now()) from contact_row\n  returning id,aggregate_id\n)\nselect id::text as callback_request_id,aggregate_id::text as contact_id from event_row",
+        "options": {
+          "queryReplacement": "={{ [($json.body || {}).tenantId || ($json.body || {}).tenant_id || ($json.query || {}).tenantId || $env.TENANT_ID, ($json.body || {}).customerName || 'Caller', ($json.body || {}).customerPhone, ($json.body || {}).reason || 'Out-of-hours callback requested'] }}"
+        }
+      },
+      "id": "a5e48885-c9a6-4e73-8c5e-955780417ffb",
+      "name": "Persist Callback Request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1020,
+        760
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { logged:true, callbackRequestId:$json.callback_request_id, message:'The callback request has been recorded for the salon team.' } }}",
+        "options": {}
+      },
+      "id": "5b51ef37-d2c6-403b-8f90-3cf8a5c49d3a",
+      "name": "Acknowledge Callback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -800,
+        760
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Check Availability": {
+      "main": [
+        [
+          {
+            "node": "Load Availability Tenant Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Availability Tenant Config": {
+      "main": [
+        [
+          {
+            "node": "Prepare Availability Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Availability Query": {
+      "main": [
+        [
+          {
+            "node": "Availability Request Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Availability Request Valid?": {
+      "main": [
+        [
+          {
+            "node": "Check Google Calendar Free Busy",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Availability Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Google Calendar Free Busy": {
+      "main": [
+        [
+          {
+            "node": "Choose Slot or Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Choose Slot or Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Return Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Appointment": {
+      "main": [
+        [
+          {
+            "node": "Find Upcoming Appointments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Upcoming Appointments": {
+      "main": [
+        [
+          {
+            "node": "Format Upcoming Appointments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Upcoming Appointments": {
+      "main": [
+        [
+          {
+            "node": "Return Upcoming Appointments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Complaint": {
+      "main": [
+        [
+          {
+            "node": "Normalise Complaint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Complaint": {
+      "main": [
+        [
+          {
+            "node": "Persist Complaint Before Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Complaint Before Alert": {
+      "main": [
+        [
+          {
+            "node": "Prepare Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Owner Alert": {
+      "main": [
+        [
+          {
+            "node": "Owner Alert Transport Live?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Owner Alert Transport Live?": {
+      "main": [
+        [
+          {
+            "node": "Send Owner Complaint Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LOUD STUB Owner Complaint Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Owner Complaint Alert": {
+      "main": [
+        [
+          {
+            "node": "Record Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LOUD STUB Owner Complaint Alert": {
+      "main": [
+        [
+          {
+            "node": "Record Owner Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Owner Alert": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge Complaint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Callback": {
+      "main": [
+        [
+          {
+            "node": "Persist Callback Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Callback Request": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  },
+  "versionId": "f03e762d-42ee-4d90-8fdd-c542370eb3ff",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

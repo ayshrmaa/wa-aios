@@ -1,0 +1,390 @@
+{
+  "name": "WA AIOS - No-show Recovery",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "368c4de2-e46b-4a02-86db-89fc83b88476",
+      "name": "Every 10 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with original as (\nselect a.tenant_id::text,a.id::text appointment_id,a.contact_id::text,a.service,a.staff,t.timezone,t.quiet_hours,t.messaging_config,\n  step.template_id,step.channel,case when step.channel='email' then c.email else c.phone_e164 end recipient,step.due_at,\n  (a.status_source='inferred') as inferred\nfrom appointments a join contacts c on c.id=a.contact_id join tenants t on t.id=a.tenant_id\ncross join lateral (values\n ('no_show_30m','whatsapp',a.starts_at+interval '30 minutes'),\n ('no_show_day1','email',a.starts_at+interval '1 day'),\n ('no_show_day3','whatsapp',a.starts_at+interval '3 days'),\n ('no_show_day7','none',a.starts_at+interval '7 days')\n) step(template_id,channel,due_at)\nwhere a.status='no_show' and step.due_at between now()-interval '10 minutes' and now()\nand ((step.channel='whatsapp' and c.whatsapp_consent) or (step.channel='email' and c.email_consent) or step.channel='none')\nand not exists(select 1 from appointments r where r.recovered_from_no_show_id=a.id)\nand not exists(select 1 from messages m where m.appointment_id=a.id and m.template_id=step.template_id)\nand not exists(select 1 from sequence_runs sr where sr.appointment_id=a.id and sr.sequence_type='no_show_recovery' and sr.current_step=step.template_id and sr.status='active')\n), deferred as (\n select sr.tenant_id::text,sr.appointment_id::text,sr.contact_id::text,a.service,a.staff,t.timezone,t.quiet_hours,t.messaging_config,\n        sr.current_step as template_id,sr.metadata->>'channel' as channel,sr.metadata->>'recipient' as recipient,sr.next_fire_at as due_at,\n        (a.status_source='inferred') as inferred\n from sequence_runs sr join appointments a on a.id=sr.appointment_id join tenants t on t.id=sr.tenant_id\n where sr.sequence_type='no_show_recovery' and sr.status='active' and sr.next_fire_at between now()-interval '10 minutes' and now()\n and not exists(select 1 from appointments r where r.recovered_from_no_show_id=a.id)\n)\nselect * from original union all select * from deferred",
+        "options": {}
+      },
+      "id": "20961cd2-3d99-4c2d-874b-69e373cfff09",
+      "name": "Find Due No-show Steps",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -760,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst now = new Date();\nreturn $input.all().map(item => {\n  const j = item.json;\n  const quiet = typeof j.quiet_hours === 'string' ? JSON.parse(j.quiet_hours) : j.quiet_hours;\n  const messaging = typeof j.messaging_config === 'string' ? JSON.parse(j.messaging_config) : j.messaging_config;\n  const quietNow = isQuiet(now, j.timezone, quiet);\n  let action = quietNow ? 'defer' : 'send', deferredUntil = null;\n  if (quietNow) {\n    const p = parts(now, j.timezone), [eh,em] = quiet.end.split(':').map(Number);\n    const current = Number(p.hour)*60+Number(p.minute), target=eh*60+em;\n    const minutes = current < target ? target-current : (1440-current)+target;\n    deferredUntil = new Date(now.getTime()+minutes*60000).toISOString();\n  }\n  const opening = j.inferred ? 'It looks like we may have missed you. ' : 'We missed you. ';\n  const body = opening + 'Reply to rebook your ' + j.service + ' appointment.';\n  return {json:{...j,messaging,action,deferredUntil,body,transportPayload:{tenantId:j.tenant_id,channel:j.channel,to:j.recipient,templateId:j.template_id,body}}};\n});"
+      },
+      "id": "900c670e-3078-4001-8e9f-7ed58c3ee0d1",
+      "name": "Prepare Recovery Step",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "767a5340-a77b-45f7-8d96-0cf8377b109f",
+              "leftValue": "={{ $json.template_id }}",
+              "rightValue": "no_show_day7",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "63109995-6cb9-4da5-8e09-ac2a3d8d1c5e",
+      "name": "Move to Re-engagement?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into sequence_runs (tenant_id,contact_id,appointment_id,sequence_type,status,current_step,next_fire_at,metadata)\nvalues ($1::uuid,$2::uuid,$3::uuid,'re_engagement','active','start',now(),jsonb_build_object('origin','no_show_day7')) returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id,$json.contact_id,$json.appointment_id] }}"
+        }
+      },
+      "id": "ffd792ac-b617-4504-8e00-cb4863ea4e18",
+      "name": "Start Re-engagement",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -100,
+        -120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "a7e1a318-f466-4eb3-893f-fc8399bb8a2d",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "send",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5adca96d-146d-4d45-8971-639b3678b229",
+      "name": "Recovery Can Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "b70ac27b-bfcb-426c-8b5d-7cae110ba770",
+              "leftValue": "={{ $json.messaging.mode }}",
+              "rightValue": "live",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ab660c01-da7a-4c5d-85cd-a7bbc9cc2241",
+      "name": "Recovery Transport Live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MESSAGING_TRANSPORT_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MESSAGING_TRANSPORT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.transportPayload) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "65ea78d3-3c08-44ea-8666-91a53c2df133",
+      "name": "Send Recovery via Adapter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        340,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.warn('[WA AIOS STUB] Would send recovery:',JSON.stringify($json.transportPayload)); return $input.all().map(i=>({json:{...i.json,delivery_status:'stubbed'}}));"
+      },
+      "id": "3eca4dba-3f04-41b8-89cb-66bb7ab1f75f",
+      "name": "LOUD STUB Recovery Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with message_row as (\n insert into messages (tenant_id,contact_id,appointment_id,channel,direction,body,template_id,delivery_status,sent_at)\n values($1::uuid,$2::uuid,$3::uuid,$4,'outbound',$5,$6,$7,now()) returning id\n), completed as (\n update sequence_runs set status='completed',exit_reason='sent',next_fire_at=null\n where appointment_id=$3::uuid and sequence_type='no_show_recovery' and current_step=$6 and status='active'\n)\nselect id::text from message_row",
+        "options": {
+          "queryReplacement": "={{ [ $('Prepare Recovery Step').item.json.tenant_id,$('Prepare Recovery Step').item.json.contact_id,$('Prepare Recovery Step').item.json.appointment_id,$('Prepare Recovery Step').item.json.channel,$('Prepare Recovery Step').item.json.body,$('Prepare Recovery Step').item.json.template_id,$json.delivery_status||'sent' ] }}"
+        }
+      },
+      "id": "ac4c6938-e906-4d64-861c-31a059a6e17b",
+      "name": "Log Recovery Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        560,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into sequence_runs (tenant_id,contact_id,appointment_id,sequence_type,status,current_step,next_fire_at,metadata)\nvalues($1::uuid,$2::uuid,$3::uuid,'no_show_recovery','active',$4,$5::timestamptz,$6::jsonb) returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id,$json.contact_id,$json.appointment_id,$json.template_id,$json.deferredUntil,JSON.stringify({channel:$json.channel,recipient:$json.recipient,body:$json.body})] }}"
+        }
+      },
+      "id": "fad4adcf-fa7b-42ba-8d39-8f70e3a467c5",
+      "name": "Defer Recovery Step",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        120,
+        180
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 10 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Find Due No-show Steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due No-show Steps": {
+      "main": [
+        [
+          {
+            "node": "Prepare Recovery Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Recovery Step": {
+      "main": [
+        [
+          {
+            "node": "Move to Re-engagement?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move to Re-engagement?": {
+      "main": [
+        [
+          {
+            "node": "Start Re-engagement",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Recovery Can Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recovery Can Send?": {
+      "main": [
+        [
+          {
+            "node": "Recovery Transport Live?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Defer Recovery Step",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recovery Transport Live?": {
+      "main": [
+        [
+          {
+            "node": "Send Recovery via Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LOUD STUB Recovery Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Recovery via Adapter": {
+      "main": [
+        [
+          {
+            "node": "Log Recovery Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LOUD STUB Recovery Send": {
+      "main": [
+        [
+          {
+            "node": "Log Recovery Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  },
+  "versionId": "f6b6be06-e9b9-4876-867d-67d282ba478c",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

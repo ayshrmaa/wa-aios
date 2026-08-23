@@ -1,0 +1,13 @@
+{
+  "name": "wa-aios-db-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "seed:generate": "node generate-seed.mjs",
+    "validate": "node validate.mjs",
+    "export:dashboard": "node export-dashboard-data.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.10"
+  }
+}

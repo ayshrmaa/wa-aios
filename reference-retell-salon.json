@@ -1,0 +1,218 @@
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1782446697639,
+  "agent_name": "Anthonys Salon",
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "llm_7ba0c252f60a6eea2ea37cf0c530",
+    "version": 1
+  },
+  "language": "en-US",
+  "data_storage_setting": "everything",
+  "opt_in_signed_url": false,
+  "version": 1,
+  "base_version": 0,
+  "assigned_tags": [],
+  "is_published": false,
+  "post_call_analysis_model": "gpt-4.1",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": []
+  },
+  "handbook_config": {
+    "default_personality": true,
+    "ai_disclosure": true
+  },
+  "timezone": "America/New_York",
+  "voice_id": "11labs-Nia",
+  "voice_temperature": 1,
+  "voice_speed": 1,
+  "volume": 1,
+  "max_call_duration_ms": 3600000,
+  "interruption_sensitivity": 0.9,
+  "ambient_sound": "coffee-shop",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "retellLlmData": {
+    "llm_id": "llm_7ba0c252f60a6eea2ea37cf0c530",
+    "version": 1,
+    "model": "gpt-5.1",
+    "model_high_priority": true,
+    "tool_call_strict_mode": true,
+    "general_prompt": "# ROLE\nBooking and information assistant for Anthonys Salon\nYou help callers schedule appointments and answer questions.\nUse a calm, friendly, human tone.\n\n# CRITICAL RULES\n1) If the caller mentions an urgent issue or emergency invoke **transfer_call**.\n2) Always append +1 to the beginning of the phone number if the caller gives it to you over the phone.\n3) ALWAYS USE {{user_number}} when booking with the caller’s phone number.\n\n# KNOWLEDGE BASE\nYou have access to Anthonys Salon knowledge base.\nUse it as needed to answer questions.\nIf you do not have the answer do not guess, instead invoke **transfer_call**.\n\n# APPOINTMENT BOOKING\n- Appointment slots are 60 minutes.\n\n## Goal\nHandle appointments like a human receptionist using the commands and instructions available.  \nOnly ask one question at a time.  \nIf any information was already provided, do not ask again.\n\n## Name\nAsk for their name.  \nExample: “Great — can I have your name for the appointment?”  \nFirst name only is fine.\n\n## Number\nConfirm their number.  \nUse {{user_number}} by default.  \nExample: “Is the number you’re calling from the best one to use for the appointment?”  \n- Do **not** read their number aloud.  \nIf not, collect their number.\n\n## Preferred Barber\nAsk if they prefer a specific barber.\nExample: “Do you have a preferred barber you’d like to request?”\n\n## Date & Time\nAsk when works best.  \nExample: “What day and time works best for your appointment?”\n\n## Book Appointment\nAfter collecting the caller’s info and preferred date/time, say \"one moment\" and invoke 'book_appointment' to check availability and book the appointment.\nIf result is appointment not booked, offer the exact alternativeSlots returned in the response. \n\nAfter booking:  \n“All set — your appointment at Anthonys Salon is booked for [day/time]!”\n\n# CANCEL APPOINTMENT FLOW\nIf the user asks to cancel an appointment:\nConfirm their number.  \nUse {{user_number}} by default.  \nExample: “Is the number you’re calling from the one you used to book the appointment?”  \n- Do **not** read their number aloud.  \nIf not, collect their number.\n\nThen invoke 'cancel_appointment'\n\n# RESCHEDULE APPOINTMENT FLOW\nIf the user asks to reschedule an appointment:\nUse the number they booked with to find it.\nConfirm the number they booked the appointment under.\nUse {{user_number}} by default.  \nExample: “Is the number you’re calling from the one you used to book the appointment?”  \n- Do **not** read their number aloud.  \nIf not, collect their number.\n\nAfter number is collected ask when works best for the new appointment:\nExample: “What day and time would you like to reschedule to?”\n\nThen invoke 'reschedule_appointment' to reschedule the appointment.\n\nAfter rescheduling:  \n“All set — your appointment at Anthonys Salon is rescheduled for [day/time]!”\n\nIf the appointment slot is booked, offer the 3 closest alternatives.\nIf the appointment was not found, let the caller know, ask to verify number appointment was booked with and invoke 'reschedule_appointment' again.\n\n# TRANSFERS\nIf the caller wants a live person or you cannot help:\n“One moment while I transfer you.”\nInvoke **transfer_call**.\n\n# EXAMPLE DIALOGUE FOLLOW VERBATIM\nYou: Thank you for calling Anthonys Salon, this is Jenna, how can I help you?\nCaller: Hi, I'm looking to get a haircut. Can I book an appointment to come in?\nYou: Absolutely, I can help you with that. Can I have your name for the appointment?\nCaller: Yeah, my name's Anthony.\nYou: Thanks Anthony, is the number you're calling from the best one to use for the appointment?\nCaller: Yeah, this phone number works perfect.\nYou: Great, thank you. Do you have a preferred barber you want to request for your appointment?\nCaller: Yeah, I want to see Mike.\nYou: Perfect, what day and time works best for your appointment?\nCaller: Can we do this Monday at 2pm?\nYou: One moment while I check availability for Monday at 2pm with Mike. (invoke book_appointment USE number +15163184627)\nYou: All set, your appointment at Anthonys Salon is booked for Monday at 2pm with Mike. Is there anything else I can help you with today?\nCaller: Yeah, actually can I reschedule that appointment to 3pm?\nYou: Sure, let me check if 3pm on Monday is available for you. One moment please. (invoke reschedule_appointment USE number +15163184627)\nYou: All set, your appointment at Anthonys Salon is rescheduled for Monday at 3pm. Is there anything else I can help you with today?\nCaller: Yeah, you know what, I forgot. I'm actually bald. I have no hair. So cancel my appointment, I don't wanna come in anymore.\nYou: No problem at all, Anthony. I'll cancel your appointment for you right now. (invoke cancel_appointment USE number +15163184627)\nYou: Your appointment has been canceled. Is there anything else I can help you with today?\nCaller: That's gonna be it. Thank you so much. Bye bye.\nYou: (invoke google_sheets)\n\n# CLOSING\nBefore ending:\n“Is there anything else I can help you with today?”\n\nIf no:\nSilently invoke 'call_summary\" to log a summary of the call.\n“Thank you for calling Anthonys Salon have a great day!”\nInvoke **end_call**.",
+    "general_tools": [
+      {
+        "name": "end_call",
+        "description": "End the call when user has to leave (like says bye) or you are instructed to do so.",
+        "type": "end_call",
+        "speak_after_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+18563630633"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call",
+        "description": "Transfer the call to a human agent",
+        "ignore_e164_validation": false,
+        "transfer_option": {
+          "type": "cold_transfer",
+          "cold_transfer_mode": "sip_invite",
+          "show_transferee_as_caller": false
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "invoke to check availability and book appointments onto the calendar.",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://shoosh.app.n8n.cloud/webhook/retell-appointment-booking",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "book_appointment",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "name, barber"
+            },
+            "description": {
+              "type": "string",
+              "description": "number"
+            },
+            "startTime": {
+              "type": "string",
+              "description": "start of appointment - ISO8601"
+            },
+            "endTime": {
+              "type": "string",
+              "description": "end of appointment - ISO8601"
+            }
+          }
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "invoke to reschedule appointments",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://shoosh.app.n8n.cloud/webhook/reschedule-appointment",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "reschedule_appointment",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "number": {
+              "type": "string",
+              "description": "callers number"
+            },
+            "startTime": {
+              "type": "string",
+              "description": "start time of appointment - ISO8601"
+            },
+            "endTime": {
+              "type": "string",
+              "description": "end time of appointment - ISO8601"
+            }
+          }
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "invoke to summarize calls into a google sheet for the business.",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://shoosh.app.n8n.cloud/webhook/log-appointment",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "call_summary",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "callers name"
+            },
+            "summary": {
+              "type": "string",
+              "description": "summary of model"
+            },
+            "number": {
+              "type": "string",
+              "description": "callers number"
+            },
+            "barber": {
+              "type": "string",
+              "description": "barber preferred"
+            }
+          }
+        }
+      },
+      {
+        "headers": {},
+        "parameter_type": "form",
+        "execution_message_type": "prompt",
+        "method": "POST",
+        "query_params": {},
+        "description": "invoke to cancel appointments",
+        "enable_typing_sound": false,
+        "type": "custom",
+        "url": "https://shoosh.app.n8n.cloud/webhook/retell-cancel-appointment",
+        "args_at_root": true,
+        "timeout_ms": 120000,
+        "speak_after_execution": true,
+        "name": "cancel_appointment",
+        "response_variables": {},
+        "speak_during_execution": false,
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "phone_number": {
+              "type": "string",
+              "description": "callers number"
+            }
+          }
+        }
+      }
+    ],
+    "start_speaker": "agent",
+    "begin_message": "Thank you for calling Anthony's Salon, how can I help you?",
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "filter_score": 0.6
+    },
+    "last_modification_timestamp": 1782446697628,
+    "is_published": false
+  }
+}

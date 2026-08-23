@@ -1,0 +1,1438 @@
+{
+  "name": "WA AIOS - Google Calendar Booking",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "book-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "503926aa-838d-4d07-8b71-1886cfd066d4",
+      "name": "Book Appointment",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1420,
+        -300
+      ],
+      "webhookId": "71da6e40-d6e4-4a30-8eae-e1c7e151809d"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select id, name, timezone, avg_appointment_value_chf, adapter_config, services\nfrom tenants where id = $1::uuid limit 1",
+        "options": {
+          "queryReplacement": "={{ [($('Book Appointment').first().json.body || {}).tenantId || ($('Book Appointment').first().json.body || {}).tenant_id || ($('Book Appointment').first().json.query || {}).tenantId || $env.TENANT_ID] }}"
+        }
+      },
+      "id": "d6fdfc02-c5f7-4bcd-8af1-d9e453ec8ebf",
+      "name": "Load Tenant Configuration",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1200,
+        -300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst row = $input.first().json;\nconst body = $('Book Appointment').first().json.body || {};\nconst booking = typeof row.adapter_config === 'string' ? JSON.parse(row.adapter_config) : (row.adapter_config || {});\nconst services = typeof row.services === 'string' ? JSON.parse(row.services) : (row.services || []);\nconst normalise = value => String(value || '').trim().toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\nconst requestedStaffId = normalise(body.staffId);\nconst staff = requestedStaffId\n  ? (booking.staff || []).find(s => normalise(s.id) === requestedStaffId || normalise(s.name) === requestedStaffId || (s.aliases || []).some(a => normalise(a) === requestedStaffId))\n  : (booking.staff || [])[0];\nconst requestedServiceId = normalise(body.serviceId);\nconst service = services.find(s => normalise(s.id || s.name) === requestedServiceId || normalise(s.name) === requestedServiceId);\nconst start = new Date(body.startTime);\nconst durationMinutes = Number(service?.durationMinutes || booking.defaultDurationMinutes);\nconst end = new Date(start.getTime() + durationMinutes * 60000);\nlet valid = true;\nlet code = 'ok';\nlet message = 'Slot is eligible for a final availability check.';\nif (!row.id || !body.startTime || !body.serviceId || !body.customerName || !body.customerPhone || !staff || !service || Number.isNaN(start.getTime()) || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {\n  valid = false;\n  code = !service && body.serviceId ? 'unknown_service' : (!staff && body.staffId ? 'unknown_staff' : 'invalid_request');\n  message = code === 'unknown_service' ? 'I could not match that service to the salon menu.' : code === 'unknown_staff' ? 'I could not match that stylist to the salon team.' : 'Please provide startTime, serviceId, customerName and customerPhone.';\n} else {\n  const p = parts(start, row.timezone);\n  const dayName = p.weekday.toLowerCase();\n  const localStart = Number(p.hour) * 60 + Number(p.minute);\n  const endParts = parts(end, row.timezone);\n  const localEnd = Number(endParts.hour) * 60 + Number(endParts.minute);\n  const sameDay = dateKey(start, row.timezone) === dateKey(end, row.timezone);\n  const opening = booking.hours[dayName] || [];\n  const withinHours = sameDay && opening.some(window => {\n    const [sh, sm] = window.start.split(':').map(Number);\n    const [eh, em] = window.end.split(':').map(Number);\n    return localStart >= sh * 60 + sm && localEnd <= eh * 60 + em;\n  });\n  const localDate = dateKey(start, row.timezone);\n  const closed = (booking.closureDates || []).includes(localDate) || (booking.additionalHolidayDates || []).includes(localDate);\n  const holiday = holidaySet(Number(p.year), booking.swissHolidayRegion).has(localDate);\n  if (!withinHours || closed || holiday) {\n    valid = false; code = 'closed'; message = 'That time is outside opening hours or falls on a closure or Swiss public holiday.';\n  }\n}\nconst requestId = String(body.requestId || body.request_id || $execution.id);\nconst safeStart = Number.isNaN(start.getTime()) ? String(body.startTime || 'invalid') : start.toISOString();\nconst safeEnd = Number.isNaN(end.getTime()) ? 'invalid' : end.toISOString();\nreturn [{ json: {\n  valid, code, message, tenantId: row.id, timezone: row.timezone, booking,\n  staffId: staff?.id, staffName: staff?.name, calendarId: staff?.calendarId,\n  startTime: Number.isNaN(start.getTime()) ? body.startTime : start.toISOString(),\n  endTime: Number.isNaN(end.getTime()) ? null : end.toISOString(), durationMinutes,\n  requestId,\n  lockKey: staff ? staff.id + ':' + safeStart + ':' + safeEnd : requestId,\n  contactName: String(body.customerName || ''), phoneNumber: String(body.customerPhone || ''),\n  customerEmail: String(body.customerEmail || ''), notes: String(body.notes || ''),\n  serviceId: body.serviceId, service: service?.name || String(body.serviceId || ''),\n  valueChf: Number(service?.priceChf || row.avg_appointment_value_chf), leadSource: 'call'\n} }];"
+      },
+      "id": "1bbb272d-55fc-43d5-8b45-9efb42d308f6",
+      "name": "Validate Booking Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -980,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f6595875-0e4d-4937-8e38-353b46e68814",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "49eca246-59f0-416c-80b3-59dbce5e0236",
+      "name": "Booking Request Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -760,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'not_booked', code: $json.code, message: $json.message } }}",
+        "options": {}
+      },
+      "id": "487242d4-0d9b-4fb0-84dc-12870cd67de4",
+      "name": "Return Validation Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -540,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from try_acquire_booking_slot($1::uuid, $2, $3::timestamptz, $4::timestamptz, $5)",
+        "options": {
+          "queryReplacement": "={{ [$json.tenantId, $json.calendarId, $json.startTime, $json.endTime, $json.lockKey] }}"
+        }
+      },
+      "id": "bd3124e3-095e-4d7c-82d5-3e027b2bbd0f",
+      "name": "Acquire Atomic Slot Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -540,
+        -420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "18deb61a-7116-4361-8a3f-111a87223898",
+              "leftValue": "={{ $json.locked }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8f6f8cba-2396-4c16-8cf5-91c2de859279",
+      "name": "Slot Lock Acquired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -320,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Validate Booking Request').first().json.calendarId }}",
+          "mode": "id"
+        },
+        "timeMin": "={{ $('Validate Booking Request').first().json.startTime }}",
+        "timeMax": "={{ $('Validate Booking Request').first().json.endTime }}",
+        "options": {}
+      },
+      "id": "2861c0ba-57fd-44a0-8718-293af5381d18",
+      "name": "Re-verify Staff Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -100,
+        -500
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "012799ff-5389-419a-83d3-d5cef172b3ed",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "169bb216-d1be-4b1d-8c3c-95087d3d04aa",
+      "name": "Calendar Still Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        120,
+        -500
+      ]
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Validate Booking Request').first().json.calendarId }}",
+          "mode": "id"
+        },
+        "start": "={{ $('Validate Booking Request').first().json.startTime }}",
+        "end": "={{ $('Validate Booking Request').first().json.endTime }}",
+        "additionalFields": {
+          "description": "={{ 'Phone: ' + $('Validate Booking Request').first().json.phoneNumber + '\\nTenant: ' + $('Validate Booking Request').first().json.tenantId + ($('Validate Booking Request').first().json.notes ? '\\nNotes: ' + $('Validate Booking Request').first().json.notes : '') }}",
+          "summary": "={{ $('Validate Booking Request').first().json.contactName + ' - ' + $('Validate Booking Request').first().json.service }}"
+        }
+      },
+      "id": "763d37cd-5241-42ff-8930-b2f4c521c05a",
+      "name": "Create Staff Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        340,
+        -620
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with contact_row as (\n  insert into contacts (tenant_id, first_name, phone_e164, email, source, whatsapp_consent, email_consent)\n  values ($1::uuid, $2, nullif($3,''), nullif($4,''), $5, true, (nullif($4,'') is not null))\n  on conflict (tenant_id, phone_e164) do update set first_name = excluded.first_name, email = coalesce(excluded.email, contacts.email), updated_at = now()\n  returning id\n), appointment_row as (\n  insert into appointments (tenant_id, contact_id, external_id, platform, status, status_source, starts_at, ends_at, service, value_chf, staff, staff_calendar_id, lead_source)\n  select $1::uuid, id, $6, 'google_calendar', 'booked', 'workflow', $7::timestamptz, $8::timestamptz, $9, $10::numeric, $11, $12, $5 from contact_row\n  returning *\n), event_row as (\n  insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)\n  select tenant_id, 'appointment', id, 'appointment.created', 'n8n.booking', jsonb_build_object('external_id', external_id, 'staff', staff) from appointment_row\n), released as (\n  delete from booking_slot_locks where id = $13::uuid\n)\nselect id::text, external_id, starts_at, ends_at, staff from appointment_row",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate Booking Request').first().json.tenantId, $('Validate Booking Request').first().json.contactName, $('Validate Booking Request').first().json.phoneNumber, $('Validate Booking Request').first().json.customerEmail, $('Validate Booking Request').first().json.leadSource, $json.id, $('Validate Booking Request').first().json.startTime, $('Validate Booking Request').first().json.endTime, $('Validate Booking Request').first().json.service, $('Validate Booking Request').first().json.valueChf, $('Validate Booking Request').first().json.staffName, $('Validate Booking Request').first().json.calendarId, $('Acquire Atomic Slot Lock').first().json.lock_id ] }}"
+        }
+      },
+      "id": "e228e7de-6067-497a-883e-23e429719e92",
+      "name": "Persist Appointment and Release Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        560,
+        -620
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "241a897f-3f54-472a-8ec0-881429695d4a",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "617e79d0-8c6b-4ae3-8cb9-83de955b46ea",
+      "name": "Appointment Persisted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        780,
+        -620
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'booked', appointmentId: $json.id, startTime: $json.starts_at, endTime: $json.ends_at, staff: $json.staff, message: 'Appointment successfully booked.' } }}",
+        "options": {}
+      },
+      "id": "5b428810-5b9f-4f1e-81f0-41e71fe62bd8",
+      "name": "Return Booking Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1000,
+        -700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Validate Booking Request').first().json.calendarId }}",
+          "mode": "id"
+        },
+        "eventId": "={{ $('Create Staff Calendar Event').first().json.id }}",
+        "options": {}
+      },
+      "id": "325a9a3d-5c64-46b4-83cb-95ad774e6e89",
+      "name": "Compensate Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        1000,
+        -520
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "delete from booking_slot_locks where id = $1::uuid returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$('Acquire Atomic Slot Lock').first().json.lock_id] }}"
+        }
+      },
+      "id": "360c1125-d84e-4e63-8c88-2e7e33c38dbe",
+      "name": "Release Failed Booking Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1220,
+        -520
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'not_booked', code: 'persistence_failed', message: 'The booking could not be completed. No calendar event was kept. Please try another slot.' } }}",
+        "options": {}
+      },
+      "id": "bd64477e-a590-430e-831c-a1a6eb1ba38c",
+      "name": "Return Persistence Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1440,
+        -520
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "delete from booking_slot_locks where id = $1::uuid returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$('Acquire Atomic Slot Lock').first().json.lock_id] }}"
+        }
+      },
+      "id": "1fa75452-436d-4ff2-8643-e6aa4130abdb",
+      "name": "Release Busy Slot Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        340,
+        -340
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Validate Booking Request').first().json.calendarId }}",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $('Validate Booking Request').first().json.startTime }}",
+        "timeMax": "={{ new Date(new Date($('Validate Booking Request').first().json.startTime).getTime() + $('Validate Booking Request').first().json.booking.searchRangeDays * 86400000).toISOString() }}",
+        "options": {
+          "singleEvents": true,
+          "orderBy": "startTime"
+        }
+      },
+      "id": "f0ab059a-42a8-40e8-8d36-71ba7c2f78b3",
+      "name": "Get Staff Events for Alternatives",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        -220
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst ctx = $('Validate Booking Request').first().json;\nconst events = $input.all().map(i => i.json).filter(e => e.start && e.end);\nconst duration = new Date(ctx.endTime) - new Date(ctx.startTime);\nconst requested = new Date(ctx.startTime);\nconst config = ctx.booking;\nconst busy = events.map(e => [new Date(e.start.dateTime || e.start.date), new Date(e.end.dateTime || e.end.date)]);\nfunction zonedToUtc(dateString, timeString, timezone) {\n  const [y,m,d] = dateString.split('-').map(Number), [hh,mm] = timeString.split(':').map(Number);\n  const guess = new Date(Date.UTC(y,m-1,d,hh,mm));\n  const p = parts(guess, timezone);\n  const represented = Date.UTC(Number(p.year), Number(p.month)-1, Number(p.day), Number(p.hour), Number(p.minute));\n  return new Date(guess.getTime() - (represented - guess.getTime()));\n}\nconst slots = [];\nfor (let day = 0; day < config.searchRangeDays; day++) {\n  const probe = new Date(requested.getTime() + day * 86400000);\n  const p = parts(probe, ctx.timezone), key = p.year + '-' + p.month + '-' + p.day;\n  if ((config.closureDates || []).includes(key) || (config.additionalHolidayDates || []).includes(key) || holidaySet(Number(p.year), config.swissHolidayRegion).has(key)) continue;\n  for (const window of (config.hours[p.weekday.toLowerCase()] || [])) {\n    let cursor = zonedToUtc(key, window.start, ctx.timezone);\n    const close = zonedToUtc(key, window.end, ctx.timezone);\n    while (cursor.getTime() + duration <= close.getTime()) {\n      const end = new Date(cursor.getTime() + duration);\n      if (!busy.some(([a,b]) => cursor < b && end > a) && cursor > new Date()) {\n        slots.push({ startTime: cursor.toISOString(), endTime: end.toISOString(), distance: Math.abs(cursor - requested) });\n      }\n      cursor = new Date(cursor.getTime() + config.slotIntervalMinutes * 60000);\n    }\n  }\n}\nslots.sort((a,b) => a.distance - b.distance);\nreturn [{ json: { status: 'unavailable', code: 'slot_taken', message: 'That slot was just taken. Please offer one of these alternatives.', staff: ctx.staffName, alternativeSlots: slots.slice(0,3).map(({distance,...slot}) => slot) } }];"
+      },
+      "id": "4cf5db36-defa-4c49-8ffb-3ecf720b91b5",
+      "name": "Find 3 Alternatives",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "9b6982cb-795f-42e8-8a14-29b120ec8a7a",
+      "name": "Return Slot Alternatives",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1000,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cancel-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "e0790c5f-da4b-45d2-815a-989f32ab5248",
+      "name": "Cancel Appointment",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1420,
+        180
+      ],
+      "webhookId": "176abe8d-b213-47e8-8a1b-e26fa8de586d"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select a.id::text, a.external_id, a.staff_calendar_id, a.tenant_id::text\nfrom appointments a\nwhere a.tenant_id = $1::uuid and a.id = $2::uuid and a.status = 'booked' and a.starts_at > now()\nlimit 1",
+        "options": {
+          "queryReplacement": "={{ [($json.body || {}).tenantId || ($json.body || {}).tenant_id || ($json.query || {}).tenantId || $env.TENANT_ID, ($json.body || {}).appointmentId] }}"
+        }
+      },
+      "id": "2dc877bf-042a-47df-8d77-ce2e69a1f835",
+      "name": "Find Appointment to Cancel",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1200,
+        180
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "f230cfca-415c-4b9c-8c15-d820ed71374b",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e1b28441-4caa-4419-8dfb-8d52c42913bf",
+      "name": "Cancellation Appointment Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -980,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Find Appointment to Cancel').first().json.staff_calendar_id }}",
+          "mode": "id"
+        },
+        "eventId": "={{ $('Find Appointment to Cancel').first().json.external_id }}",
+        "options": {}
+      },
+      "id": "c07054b7-8eda-436a-83f9-f5e49e635429",
+      "name": "Delete Staff Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -760,
+        80
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with updated as (\n  update appointments set status = 'cancelled', status_source = 'workflow' where id = $1::uuid returning tenant_id, id\n)\ninsert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)\nselect tenant_id, 'appointment', id, 'appointment.cancelled', 'n8n.booking', jsonb_build_object('reason',nullif($2::text,'')) from updated returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$('Find Appointment to Cancel').first().json.id, ($('Cancel Appointment').first().json.body || {}).reason || ''] }}"
+        }
+      },
+      "id": "43dbbf27-d534-4608-8f3b-3154d091c899",
+      "name": "Mark Appointment Cancelled",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -540,
+        80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'cancelled', message: 'Your appointment has been cancelled.' } }}",
+        "options": {}
+      },
+      "id": "3afd4e77-9892-4ca4-8ad4-6b5e957e205d",
+      "name": "Return Cancellation Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -320,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'not_found', message: 'That upcoming appointment could not be found.' } }}",
+        "options": {}
+      },
+      "id": "0c980103-cc8c-4cde-871b-2142756b4381",
+      "name": "Return Cancellation Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -760,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reschedule-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a8a2a2d2-583d-400b-8529-84d779de43d7",
+      "name": "Reschedule Appointment",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1420,
+        660
+      ],
+      "webhookId": "98841233-82ef-46f7-8e0d-987648ff2aeb"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select a.id::text as appointment_id, a.external_id, a.staff, a.staff_calendar_id, a.tenant_id::text as tenant_id, a.starts_at as old_starts_at, a.ends_at as old_ends_at,\n       t.timezone, t.adapter_config, t.services, t.avg_appointment_value_chf\nfrom appointments a join tenants t on t.id = a.tenant_id\nwhere a.tenant_id = $1::uuid and a.id = $2::uuid and a.status = 'booked' and a.starts_at > now()\nlimit 1",
+        "options": {
+          "queryReplacement": "={{ [($json.body || {}).tenantId || ($json.body || {}).tenant_id || ($json.query || {}).tenantId || $env.TENANT_ID, ($json.body || {}).appointmentId] }}"
+        }
+      },
+      "id": "157a8918-390a-4430-8c62-51ea8fe4ac01",
+      "name": "Load Reschedule Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -1200,
+        660
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "e22192e9-dab8-4b31-8e96-d90bb0683ec0",
+              "leftValue": "={{ $json.appointment_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b651d270-8aac-49fc-85ab-0364dd99c868",
+      "name": "Reschedule Appointment Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -980,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst row = $input.first().json, body = $('Reschedule Appointment').first().json.body || {};\nconst booking = typeof row.adapter_config === 'string' ? JSON.parse(row.adapter_config) : row.adapter_config;\nconst start = new Date(body.newStartTime);\nconst duration = new Date(row.old_ends_at) - new Date(row.old_starts_at);\nconst end = new Date(start.getTime() + duration);\nlet valid = !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end > start;\nif (valid) {\n  const p = parts(start, row.timezone), ep = parts(end, row.timezone), key = dateKey(start, row.timezone);\n  const startMin = Number(p.hour)*60+Number(p.minute), endMin = Number(ep.hour)*60+Number(ep.minute);\n  const windows = booking.hours[p.weekday.toLowerCase()] || [];\n  valid = key === dateKey(end,row.timezone) && windows.some(w => { const s=w.start.split(':').map(Number), e=w.end.split(':').map(Number); return startMin>=s[0]*60+s[1] && endMin<=e[0]*60+e[1]; });\n  valid = valid && !(booking.closureDates||[]).includes(key) && !(booking.additionalHolidayDates||[]).includes(key) && !holidaySet(Number(p.year),booking.swissHolidayRegion).has(key);\n}\nconst requestId = String(body.requestId || body.request_id || $execution.id);\nconst safeStart = Number.isNaN(start.getTime()) ? String(body.newStartTime || 'invalid') : start.toISOString();\nconst safeEnd = Number.isNaN(end.getTime()) ? 'invalid' : end.toISOString();\nreturn [{json:{...row, valid, startTime:Number.isNaN(start.getTime())?body.newStartTime:start.toISOString(), endTime:Number.isNaN(end.getTime())?null:end.toISOString(), requestId, lockKey:row.staff_calendar_id + ':' + safeStart + ':' + safeEnd}}];"
+      },
+      "id": "61bd206a-8f00-4216-857e-b4c6d56fd17c",
+      "name": "Validate Reschedule Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "40c1fb3c-6ae1-48e9-83d1-6cc99afe8e2a",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "666c6b5b-be9e-4c55-8181-bc9524faa038",
+      "name": "Reschedule Slot Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -540,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from try_acquire_booking_slot($1::uuid,$2,$3::timestamptz,$4::timestamptz,$5)",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id, $json.staff_calendar_id, $json.startTime, $json.endTime, $json.lockKey] }}"
+        }
+      },
+      "id": "c8083ce6-b482-4730-84ed-db87715ffa05",
+      "name": "Acquire Reschedule Slot Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -320,
+        460
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "4fe39ad3-5aac-45fd-8ee2-c680f553cc03",
+              "leftValue": "={{ $json.locked }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dea9f6d7-4bd6-43d5-87d8-82af275a9e23",
+      "name": "Reschedule Lock Acquired?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Validate Reschedule Slot').first().json.staff_calendar_id }}",
+          "mode": "id"
+        },
+        "timeMin": "={{ $('Validate Reschedule Slot').first().json.startTime }}",
+        "timeMax": "={{ $('Validate Reschedule Slot').first().json.endTime }}",
+        "options": {}
+      },
+      "id": "5830b796-e70e-44cf-80b5-f71f6424ff48",
+      "name": "Re-verify Reschedule Calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        120,
+        380
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c9271d67-fbad-4dc9-8263-ca4b479a6e3a",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e21f2345-6f04-42a3-85f6-789016103a22",
+      "name": "Reschedule Calendar Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        340,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "={{ $('Validate Reschedule Slot').first().json.staff_calendar_id }}",
+          "mode": "id"
+        },
+        "eventId": "={{ $('Validate Reschedule Slot').first().json.external_id }}",
+        "updateFields": {
+          "start": "={{ $('Validate Reschedule Slot').first().json.startTime }}",
+          "end": "={{ $('Validate Reschedule Slot').first().json.endTime }}"
+        }
+      },
+      "id": "42d3c8ed-56da-4488-83f3-347b4a079a77",
+      "name": "Update Staff Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        260
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_CALENDAR_CREDENTIAL_ID",
+          "name": "WA AIOS Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with updated as (\n  update appointments set starts_at=$2::timestamptz, ends_at=$3::timestamptz, status_source='workflow' where id=$1::uuid returning tenant_id,id,starts_at,ends_at\n), event_row as (\n  insert into events (tenant_id,aggregate_type,aggregate_id,event_type,source,payload)\n  select tenant_id,'appointment',id,'appointment.rescheduled','n8n.booking',jsonb_build_object('starts_at',starts_at,'ends_at',ends_at) from updated\n), released as (delete from booking_slot_locks where id=$4::uuid)\nselect id::text, starts_at, ends_at from updated",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate Reschedule Slot').first().json.appointment_id, $('Validate Reschedule Slot').first().json.startTime, $('Validate Reschedule Slot').first().json.endTime, $('Acquire Reschedule Slot Lock').first().json.lock_id ] }}"
+        }
+      },
+      "id": "b62b2982-1f75-4d6e-8766-806879211a93",
+      "name": "Persist Reschedule and Release Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        780,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status:'rescheduled', startTime:$json.starts_at, endTime:$json.ends_at, message:'Appointment successfully rescheduled.' } }}",
+        "options": {}
+      },
+      "id": "24a4495a-db53-4763-827b-0bd9952533a9",
+      "name": "Return Reschedule Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1000,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "delete from booking_slot_locks where id=$1::uuid returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$('Acquire Reschedule Slot Lock').first().json.lock_id] }}"
+        }
+      },
+      "id": "0dac09de-44e0-4631-8fda-b70b55debdf1",
+      "name": "Release Reschedule Lock",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        560,
+        500
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status:'not_rescheduled', code:'slot_unavailable', message:'The requested time is unavailable. Please choose another time.' } }}",
+        "options": {}
+      },
+      "id": "5e0df9d3-8ae5-4eb8-80e1-1875f733c88d",
+      "name": "Return Reschedule Unavailable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        780,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status:'not_rescheduled', code:'closed', message:'That time is outside opening hours or falls on a closure or Swiss public holiday.' } }}",
+        "options": {}
+      },
+      "id": "bac44444-a9b4-4d3a-832c-ac3e052c4e01",
+      "name": "Return Invalid Reschedule",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -320,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status:'not_found', message:'No upcoming appointment was found for that phone number.' } }}",
+        "options": {}
+      },
+      "id": "755771e1-e853-4668-81a8-369042fa908b",
+      "name": "Return Reschedule Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -760,
+        780
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Book Appointment": {
+      "main": [
+        [
+          {
+            "node": "Load Tenant Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Tenant Configuration": {
+      "main": [
+        [
+          {
+            "node": "Validate Booking Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Booking Request": {
+      "main": [
+        [
+          {
+            "node": "Booking Request Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Booking Request Valid?": {
+      "main": [
+        [
+          {
+            "node": "Acquire Atomic Slot Lock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Validation Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire Atomic Slot Lock": {
+      "main": [
+        [
+          {
+            "node": "Slot Lock Acquired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slot Lock Acquired?": {
+      "main": [
+        [
+          {
+            "node": "Re-verify Staff Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Staff Events for Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-verify Staff Calendar": {
+      "main": [
+        [
+          {
+            "node": "Calendar Still Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendar Still Available?": {
+      "main": [
+        [
+          {
+            "node": "Create Staff Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release Busy Slot Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Staff Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Persist Appointment and Release Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Appointment and Release Lock": {
+      "main": [
+        [
+          {
+            "node": "Appointment Persisted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appointment Persisted?": {
+      "main": [
+        [
+          {
+            "node": "Return Booking Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Compensate Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compensate Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Release Failed Booking Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Failed Booking Lock": {
+      "main": [
+        [
+          {
+            "node": "Return Persistence Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Busy Slot Lock": {
+      "main": [
+        [
+          {
+            "node": "Get Staff Events for Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Staff Events for Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Find 3 Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find 3 Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Return Slot Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel Appointment": {
+      "main": [
+        [
+          {
+            "node": "Find Appointment to Cancel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Appointment to Cancel": {
+      "main": [
+        [
+          {
+            "node": "Cancellation Appointment Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancellation Appointment Found?": {
+      "main": [
+        [
+          {
+            "node": "Delete Staff Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Cancellation Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Staff Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Mark Appointment Cancelled",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Appointment Cancelled": {
+      "main": [
+        [
+          {
+            "node": "Return Cancellation Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reschedule Appointment": {
+      "main": [
+        [
+          {
+            "node": "Load Reschedule Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Reschedule Context": {
+      "main": [
+        [
+          {
+            "node": "Reschedule Appointment Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reschedule Appointment Found?": {
+      "main": [
+        [
+          {
+            "node": "Validate Reschedule Slot",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Reschedule Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Reschedule Slot": {
+      "main": [
+        [
+          {
+            "node": "Reschedule Slot Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reschedule Slot Valid?": {
+      "main": [
+        [
+          {
+            "node": "Acquire Reschedule Slot Lock",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Invalid Reschedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Acquire Reschedule Slot Lock": {
+      "main": [
+        [
+          {
+            "node": "Reschedule Lock Acquired?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reschedule Lock Acquired?": {
+      "main": [
+        [
+          {
+            "node": "Re-verify Reschedule Calendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Return Reschedule Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-verify Reschedule Calendar": {
+      "main": [
+        [
+          {
+            "node": "Reschedule Calendar Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reschedule Calendar Available?": {
+      "main": [
+        [
+          {
+            "node": "Update Staff Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release Reschedule Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Staff Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Persist Reschedule and Release Lock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Reschedule and Release Lock": {
+      "main": [
+        [
+          {
+            "node": "Return Reschedule Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release Reschedule Lock": {
+      "main": [
+        [
+          {
+            "node": "Return Reschedule Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  },
+  "versionId": "a7a2f593-1d41-40fd-83a9-aa6838be4935",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

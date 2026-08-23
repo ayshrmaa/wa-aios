@@ -1,0 +1,119 @@
+{
+  "name": "WA AIOS - Retell Call Logging",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-call",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "86967bbe-6f0f-4a26-81c2-0bdfcd6445d1",
+      "name": "Retell Call Completed",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -820,
+        0
+      ],
+      "webhookId": "c20ca595-9d7f-43bf-89e5-46ceaaf15a9d"
+    },
+    {
+      "parameters": {
+        "jsCode": "const request=$input.first().json,body=request.body||{}; const raw=String(body.outcome||'question_answered'); const outcome=({booked:'booked',rescheduled:'rescheduled',cancelled:'cancelled',transferred:'transferred',complaint:'transferred',callback_requested:'transferred',abandoned:'missed',question_answered:'inquiry'})[raw]||'inquiry'; return [{json:{tenantId:body.tenantId||body.tenant_id||(request.query||{}).tenantId||$env.TENANT_ID,customerName:String(body.customerName||'Caller'),customerPhone:String(body.customerPhone||''),callId:String(body.callId||$execution.id),startedAt:body.startedAt||new Date().toISOString(),durationSeconds:Number(body.durationSeconds||0),answered:body.answered!==false,outcome,summary:String(body.summary||''),recordingUrl:String(body.recordingUrl||''),disclosurePlayed:body.disclosurePlayed===true||body.disclosure_played===true}}];"
+      },
+      "id": "00854e72-7df5-44ba-8bec-48ec6f4b0a3c",
+      "name": "Normalise Call Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with contact_row as (\n insert into contacts(tenant_id,first_name,phone_e164,source)\n values($1::uuid,coalesce(nullif($2,''),'Caller'),nullif($3,''),'call')\n on conflict(tenant_id,phone_e164) do update set updated_at=now() returning id\n), call_row as (\n insert into calls(tenant_id,contact_id,retell_call_id,started_at,duration_seconds,answered,outcome,transcript,recording_url,disclosure_played)\n select $1::uuid,id,$4,$5::timestamptz,$6::int,$7::boolean,$8,nullif($9,''),nullif($10,''),$11::boolean from contact_row\n on conflict(tenant_id,retell_call_id) do update set duration_seconds=excluded.duration_seconds,outcome=excluded.outcome,transcript=excluded.transcript,recording_url=excluded.recording_url,disclosure_played=excluded.disclosure_played\n returning *\n), audit_row as (\n insert into events(tenant_id,aggregate_type,aggregate_id,event_type,source,payload)\n select tenant_id,'call',id,'call.completed','retell',jsonb_build_object('outcome',outcome,'disclosure_played',disclosure_played) from call_row\n)\nselect id::text,disclosure_played from call_row",
+        "options": {
+          "queryReplacement": "={{ [ $json.tenantId,$json.customerName,$json.customerPhone,$json.callId,$json.startedAt,$json.durationSeconds,$json.answered,$json.outcome,$json.summary,$json.recordingUrl,$json.disclosurePlayed ] }}"
+        }
+      },
+      "id": "e73817bb-a361-4aaa-8cf4-3d366910d1bd",
+      "name": "Persist Call and Audit Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -360,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { logged:true, callId:$json.id, complianceFlag:$json.disclosure_played?null:'recording_disclosure_missing' } }}",
+        "options": {}
+      },
+      "id": "9ea279e7-6c25-4f62-8652-27b4c38274c6",
+      "name": "Acknowledge Call Log",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -120,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Retell Call Completed": {
+      "main": [
+        [
+          {
+            "node": "Normalise Call Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalise Call Summary": {
+      "main": [
+        [
+          {
+            "node": "Persist Call and Audit Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Call and Audit Event": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge Call Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  },
+  "versionId": "cfb78131-037a-4676-8d25-8c1211b02152",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

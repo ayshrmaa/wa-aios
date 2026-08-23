@@ -1,0 +1,326 @@
+{
+  "channel": "voice",
+  "agent_name": "{{salon_name}} — AI Receptionist",
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "llm_7ba0c252f60a6eea2ea37cf0c530",
+    "version": 1
+  },
+  "language": "multi",
+  "data_storage_setting": "everything",
+  "opt_in_signed_url": false,
+  "assigned_tags": [],
+  "post_call_analysis_model": "gpt-4.1",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": []
+  },
+  "handbook_config": {
+    "default_personality": true,
+    "ai_disclosure": true
+  },
+  "timezone": "Europe/Zurich",
+  "voice_id": "11labs-Nia",
+  "voice_temperature": 1,
+  "voice_speed": 1,
+  "volume": 1,
+  "max_call_duration_ms": 3600000,
+  "interruption_sensitivity": 0.9,
+  "ambient_sound": "coffee-shop",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "retellLlmData": {
+    "model": "gpt-5.1",
+    "model_high_priority": true,
+    "tool_call_strict_mode": true,
+    "general_prompt": "# ROLE\n\nYou are the receptionist for {{salon_name}}, a hair and beauty salon in {{city}}, Switzerland.\nYou answer the phone, book appointments, answer questions, and pass real problems to a human.\n\nSpeak like a calm, warm front-desk person who has worked there for years. Short sentences.\nOne question at a time. Never rushed, never robotic.\n\n# CRITICAL RULES\n\n1. The recording disclosure has already been played as the first thing on this call. Do not repeat it\n   unless the caller asks whether they are being recorded — then confirm plainly and move on.\n2. The caller's number is {{user_number}}. Never read it back aloud digit by digit.\n3. The current time is {{current_time_Europe/Zurich}}. Use it for anything time-related.\n   All times you speak are Swiss local time. Use the 24-hour clock.\n4. Prices are in Swiss francs. Say \"francs\", not \"dollars\".\n5. If the caller is upset, describes a bad result, or wants a refund — do NOT try to resolve it and do\n   NOT offer a discount. Say you will have someone call them back today, invoke **log_complaint**,\n   then invoke **transfer_call**.\n6. Never confirm a booking you have not actually made. If a tool call fails, say so honestly and\n   transfer. A caller who arrives to no appointment is worse than a caller you transferred.\n7. If you do not know something, do not guess. Check the knowledge base; if it is not there,\n   invoke **transfer_call**.\n\n# WHAT YOU CAN BOOK\n\nServices and durations come from the knowledge base. Duration is per service — never assume.\nA fringe trim and a full colour are not the same appointment length.\n\nIf the caller names a service you do not recognise, ask them to describe it, then match it to the\nclosest service on the menu. If nothing matches, transfer.\n\n# BOOKING FLOW\n\nAsk one question at a time, in this order. Do not batch them.\n\n## 1. Service\n\"What are you booking in for?\"\nDetermines the appointment length. You need this before you can check any times.\n\n## 2. Stylist\n\"Do you have someone you usually see, or shall I book you with whoever's free?\"\n- If they name someone, book with that stylist.\n- If they have no preference, use {{default_staff_handling}}.\n- Availability is checked against that specific stylist's calendar. Two stylists being free does not\n  make one stylist free twice.\n\n## 3. Name\n\"Can I take your name for the booking?\"\nFirst name is enough.\n\n## 4. Phone\n\"Is the number you're calling from the best one for the reminder?\"\nDefault to {{user_number}}. If they say no, take the correct number.\n\n## 5. Email\n\"And an email address for the confirmation?\"\nYou must collect this. The confirmation and the day-before reminder both go by email.\nIf the caller refuses, that is fine — say \"no problem, I'll send everything by WhatsApp instead\"\nand continue. Never invent an email address.\n\n## 6. Date and time\n\"When suits you?\"\nThen invoke **check_availability**.\n\n- If the slot is free, invoke **book_appointment**.\n- If it is taken, say so and offer the three closest alternatives the tool returns.\n  \"That one's gone, I'm afraid. I've got 14:00, 16:30, or Thursday at 10:00.\"\n- Only offer times the tool actually returned. Never guess at availability.\n\n## 7. Confirm\nRead back the service, stylist, day and time exactly as booked.\n\"You're booked in — {{service}} with {{stylist}}, {{day}} at {{time}}. See you then.\"\n\nThe time you confirm must be the time that was booked. If the tool booked a different slot than the\ncaller asked for, say that explicitly: \"I couldn't do 14:00, so I've put you down for 16:30.\"\n\n# CANCELLING AND RESCHEDULING\n\nLook the appointment up by the caller's number via **find_appointment**.\n- If found, confirm which appointment before changing anything: \"That's your colour with Lena on\n  Thursday at 11:00 — is that the one?\"\n- If more than one is found, ask which.\n- If none is found, do not insist they are wrong. Take their name and invoke **transfer_call**.\n\nReschedule is a cancel plus a book. Confirm the new time before releasing the old one.\n\n# QUESTIONS\n\nAnswer from the knowledge base: hours, prices, parking, products, how long a service takes,\nwhether a patch test is needed.\n\nIf asked something the knowledge base does not cover, say \"let me put you through to someone who\ncan answer that properly\" and invoke **transfer_call**.\n\n# TRANSFERS\n\nTransfer when: the caller asks for a person, is complaining, has a medical or allergy question,\nwants to discuss a price that is not on the menu, or you have failed a task twice.\n\n\"One moment, I'll put you through.\"\nThen invoke **transfer_call**.\n\nOutside opening hours there is nobody to transfer to. Say instead:\n\"There's nobody in the salon right now, but I'll have someone call you back first thing.\nWhat's the best number?\"\nThen invoke **log_callback_request**.\n\n# CLOSING\n\n\"Anything else I can help with?\"\nIf no: \"Thanks for calling {{salon_name}}, see you soon.\" Then invoke **end_call**.\n\n# EXAMPLE\n\nYou: Thanks for calling {{salon_name}}, how can I help?\nCaller: I'd like to book a cut and colour.\nYou: Lovely — do you have a stylist you usually see?\nCaller: Lena, if she's around.\nYou: Let me check Lena's diary. Can I take your name?\nCaller: Sophie.\nYou: Thanks Sophie. Is the number you're calling from the best one for the reminder?\nCaller: Yes.\nYou: And an email for the confirmation?\nCaller: sophie.m@example.ch\nYou: When suits you?\nCaller: Thursday afternoon.\nYou: Lena's got 14:00 or 16:30 on Thursday.\nCaller: 14:00.\nYou: You're booked in — cut and colour with Lena, Thursday at 14:00. Anything else?\nCaller: No, thanks.\nYou: Thanks for calling {{salon_name}}, see you Thursday.\n",
+    "general_tools": [
+      {
+        "type": "end_call",
+        "name": "end_call",
+        "description": "End the call once the caller has confirmed they need nothing further."
+      },
+      {
+        "type": "transfer_call",
+        "name": "transfer_call",
+        "description": "Transfer to a human. Use for complaints, allergy or medical questions, requests for a person, off-menu pricing, or after two failed attempts at a task.",
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "{{TRANSFER_NUMBER}}"
+        }
+      },
+      {
+        "type": "custom",
+        "name": "check_availability",
+        "description": "Check whether a specific stylist is free at a requested time. Returns either confirmation the slot is open, or the three closest alternative slots. Never state availability without calling this.",
+        "url": "{{N8N_BASE_URL}}/webhook/check-availability",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "startTime",
+            "serviceId"
+          ],
+          "properties": {
+            "startTime": {
+              "type": "string",
+              "description": "Requested start, ISO8601 with Europe/Zurich offset"
+            },
+            "serviceId": {
+              "type": "string",
+              "description": "Service id from the knowledge base menu. Determines duration."
+            },
+            "staffId": {
+              "type": "string",
+              "description": "Stylist id. Omit only if the caller has no preference."
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "book_appointment",
+        "description": "Book the appointment. Only call after check_availability confirmed the slot. Re-verifies the slot server-side and may still fail if someone booked it first — if it fails, tell the caller honestly and offer alternatives.",
+        "url": "{{N8N_BASE_URL}}/webhook/book-appointment",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "startTime",
+            "serviceId",
+            "customerName",
+            "customerPhone"
+          ],
+          "properties": {
+            "startTime": {
+              "type": "string",
+              "description": "Confirmed start, ISO8601 with Europe/Zurich offset"
+            },
+            "serviceId": {
+              "type": "string",
+              "description": "Service id from the menu"
+            },
+            "staffId": {
+              "type": "string",
+              "description": "Stylist id"
+            },
+            "customerName": {
+              "type": "string",
+              "description": "Caller's first name"
+            },
+            "customerPhone": {
+              "type": "string",
+              "description": "Best number for reminders"
+            },
+            "customerEmail": {
+              "type": "string",
+              "description": "Email for confirmation and the day-before reminder. Omit if the caller declined. NEVER invent one."
+            },
+            "notes": {
+              "type": "string",
+              "description": "Anything relevant the caller mentioned"
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "find_appointment",
+        "description": "Look up existing appointments by the caller's phone number before cancelling or rescheduling.",
+        "url": "{{N8N_BASE_URL}}/webhook/find-appointment",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "customerPhone"
+          ],
+          "properties": {
+            "customerPhone": {
+              "type": "string",
+              "description": "Caller's number"
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "reschedule_appointment",
+        "description": "Move an existing appointment. Confirm the new slot is free before releasing the old one.",
+        "url": "{{N8N_BASE_URL}}/webhook/reschedule-appointment",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "appointmentId",
+            "newStartTime"
+          ],
+          "properties": {
+            "appointmentId": {
+              "type": "string",
+              "description": "Id returned by find_appointment"
+            },
+            "newStartTime": {
+              "type": "string",
+              "description": "New start, ISO8601 with Europe/Zurich offset"
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "cancel_appointment",
+        "description": "Cancel an existing appointment after confirming with the caller which one.",
+        "url": "{{N8N_BASE_URL}}/webhook/cancel-appointment",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "appointmentId"
+          ],
+          "properties": {
+            "appointmentId": {
+              "type": "string",
+              "description": "Id returned by find_appointment"
+            },
+            "reason": {
+              "type": "string",
+              "description": "Reason if the caller gave one"
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "log_complaint",
+        "description": "Log a complaint and alert the owner immediately. Call this BEFORE transferring whenever the caller is dissatisfied. Never attempt to resolve or offer compensation yourself.",
+        "url": "{{N8N_BASE_URL}}/webhook/log-complaint",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "customerPhone",
+            "summary"
+          ],
+          "properties": {
+            "customerPhone": {
+              "type": "string"
+            },
+            "customerName": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string",
+              "description": "What the caller is unhappy about, in their own words where possible"
+            },
+            "severity": {
+              "type": "string",
+              "description": "low, medium or high"
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "log_callback_request",
+        "description": "Used out of hours when there is nobody to transfer to. Records a callback request for the morning.",
+        "url": "{{N8N_BASE_URL}}/webhook/log-callback",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "customerPhone"
+          ],
+          "properties": {
+            "customerPhone": {
+              "type": "string"
+            },
+            "customerName": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "type": "custom",
+        "name": "call_summary",
+        "description": "Log the call outcome at the end of every call.",
+        "url": "{{N8N_BASE_URL}}/webhook/log-call",
+        "parameters": {
+          "type": "object",
+          "required": [
+            "summary"
+          ],
+          "properties": {
+            "customerName": {
+              "type": "string"
+            },
+            "customerPhone": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "outcome": {
+              "type": "string",
+              "description": "booked, rescheduled, cancelled, question_answered, transferred, complaint, callback_requested, or abandoned"
+            }
+          }
+        }
+      }
+    ],
+    "start_speaker": "agent",
+    "begin_message": "Thanks for calling {{salon_name}}. Just so you know, you're speaking with an automated assistant and this call is recorded. How can I help you today?",
+    "kb_config": {
+      "top_k": 3,
+      "filter_score": 0.6
+    }
+  },
+  "post_call_analysis_data": [
+    {
+      "type": "boolean",
+      "name": "disclosure_played",
+      "description": "Did the call open with the recording and AI disclosure?"
+    },
+    {
+      "type": "boolean",
+      "name": "appointment_booked",
+      "description": "Was an appointment actually booked?"
+    },
+    {
+      "type": "string",
+      "name": "user_name",
+      "description": "Caller's name",
+      "examples": []
+    },
+    {
+      "type": "number",
+      "name": "user_phone",
+      "description": "Caller's phone number"
+    },
+    {
+      "type": "string",
+      "name": "user_email",
+      "description": "Caller's email if given, else empty",
+      "examples": []
+    },
+    {
+      "type": "string",
+      "name": "service",
+      "description": "Service discussed",
+      "examples": []
+    },
+    {
+      "type": "string",
+      "name": "stylist",
+      "description": "Stylist requested if any",
+      "examples": []
+    },
+    {
+      "type": "boolean",
+      "name": "complaint_raised",
+      "description": "Did the caller raise a complaint?"
+    },
+    {
+      "type": "string",
+      "name": "outcome",
+      "description": "booked, rescheduled, cancelled, question_answered, transferred, complaint, callback_requested, abandoned",
+      "examples": []
+    }
+  ]
+}

@@ -1,0 +1,1108 @@
+{
+  "name": "AI Receptionist - Appointments",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "retell-appointment-booking",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "56ef1a41-4cd0-4305-8b10-8fbfa425e596",
+      "name": "Check & Book",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -960,
+        96
+      ],
+      "webhookId": "bb7a7164"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "97551305",
+              "name": "calendarId",
+              "value": "YOUR_CALENDAR_ID",
+              "type": "string"
+            },
+            {
+              "id": "749005aa",
+              "name": "appointmentDuration",
+              "value": 60,
+              "type": "number"
+            },
+            {
+              "id": "efe02be9",
+              "name": "searchRangeDays",
+              "value": 10,
+              "type": "number"
+            },
+            {
+              "id": "7418f2e2",
+              "name": "workingHoursStart",
+              "value": 9,
+              "type": "number"
+            },
+            {
+              "id": "5b35ab6f",
+              "name": "workingHoursEnd",
+              "value": 17,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "f8b6d0a5-02e1-48c2-89d0-e98aac84977b",
+      "name": "Workflow Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -736,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "timeMin": "={{ $json.body.startTime }}",
+        "timeMax": "={{ $json.body.endTime }}",
+        "options": {}
+      },
+      "id": "8912316c-9583-4052-ade8-dc6ac3646523",
+      "name": "Get availability in a calendar",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -512,
+        96
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "520e1339",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "bc20f4d0-640b-48a2-8faa-133e69f59742",
+      "name": "Is Slot Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -288,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "start": "={{ $('Check & Book').first().json.body.startTime }}",
+        "end": "={{ $('Check & Book').first().json.body.endTime }}",
+        "additionalFields": {
+          "description": "={{ $('Check & Book').first().json.body.description }}",
+          "summary": "={{ $('Check & Book').first().json.body.summary }}"
+        }
+      },
+      "id": "df146269-8c69-411a-bc9e-356f6975e629",
+      "name": "Book Appointment",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"booked\",\n  \"startTime\": \"={{ $('Check & Book').first().json.body.startTime }}\",\n  \"endTime\": \"={{ $('Check & Book').first().json.body.endTime }}\",\n  \"message\": \"Appointment successfully booked\"\n}",
+        "options": {}
+      },
+      "id": "51917011-a317-4f98-adbf-d0c319ffc9db",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        160,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $('Check & Book').first().json.body.startTime }}",
+        "timeMax": "={{ $now.plus({ days: $('Workflow Configuration').first().json.searchRangeDays }) }}",
+        "options": {}
+      },
+      "id": "3db58ac5-8002-48e6-af31-e6340dea0903",
+      "name": "Get Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        192
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get input data from webhook and configuration\nconst webhookData = $('Check & Book').first().json.body;\nconst requestedTime = new Date(webhookData.startTime);\nconst appointmentDuration = $('Workflow Configuration').first().json.appointmentDuration || 60;\nconst workingHoursStart = $('Workflow Configuration').first().json.workingHoursStart || 9;\nconst workingHoursEnd = $('Workflow Configuration').first().json.workingHoursEnd || 17;\nconst searchRangeDays = $('Workflow Configuration').first().json.searchRangeDays || 10;\n\n// Get all existing events from previous node\nconst events = $input.all().map(item => item.json);\n\n// Helper function to check if a time slot is available\nfunction isSlotAvailable(startTime, durationMinutes, events) {\n  const endTime = new Date(startTime.getTime() + durationMinutes * 60000);\n  \n  for (const event of events) {\n    const eventStart = new Date(event.start.dateTime || event.start.date);\n    const eventEnd = new Date(event.end.dateTime || event.end.date);\n    \n    // Check for overlap\n    if (startTime < eventEnd && endTime > eventStart) {\n      return false;\n    }\n  }\n  return true;\n}\n\n// Helper function to check if time is within working hours\nfunction isWithinWorkingHours(time, workingHoursStart, workingHoursEnd) {\n  const hour = time.getHours();\n  const minutes = time.getMinutes();\n  const timeInMinutes = hour * 60 + minutes;\n  const startInMinutes = workingHoursStart * 60;\n  const endInMinutes = workingHoursEnd * 60;\n  \n  return timeInMinutes >= startInMinutes && timeInMinutes + appointmentDuration <= endInMinutes;\n}\n\n// Helper function to calculate time difference in minutes\nfunction getTimeDifference(time1, time2) {\n  return Math.abs(time1.getTime() - time2.getTime()) / 60000;\n}\n\n// Find all available slots within search range\nconst availableSlots = [];\nconst startDate = new Date(requestedTime);\nstartDate.setHours(0, 0, 0, 0);\n\nfor (let day = 0; day < searchRangeDays; day++) {\n  const currentDay = new Date(startDate);\n  currentDay.setDate(startDate.getDate() + day);\n  \n  // Skip weekends (optional - remove if weekends should be included)\n  const dayOfWeek = currentDay.getDay();\n  if (dayOfWeek === 0 || dayOfWeek === 6) continue;\n  \n  // Set to start of working hours\n  currentDay.setHours(workingHoursStart, 0, 0, 0);\n  \n  const dayEnd = new Date(currentDay);\n  dayEnd.setHours(workingHoursEnd, 0, 0, 0);\n  \n  // Check every 30-minute slot\n  for (let time = new Date(currentDay); time < dayEnd; time.setMinutes(time.getMinutes() + 30)) {\n    const slotTime = new Date(time);\n    \n    if (isWithinWorkingHours(slotTime, workingHoursStart, workingHoursEnd) && \n        isSlotAvailable(slotTime, appointmentDuration, events)) {\n      \n      const endTime = new Date(slotTime.getTime() + appointmentDuration * 60000);\n      const timeDiff = getTimeDifference(slotTime, requestedTime);\n      const isSameDay = slotTime.toDateString() === requestedTime.toDateString();\n      \n      availableSlots.push({\n        startTime: slotTime.toISOString(),\n        endTime: endTime.toISOString(),\n        formatted: slotTime.toLocaleString('en-US', {\n          weekday: 'long',\n          year: 'numeric',\n          month: 'long',\n          day: 'numeric',\n          hour: 'numeric',\n          minute: '2-digit',\n          hour12: true\n        }),\n        timeDifference: timeDiff,\n        isSameDay: isSameDay,\n        date: slotTime.toISOString().split('T')[0]\n      });\n    }\n  }\n}\n\n// Rank slots by proximity to requested time\n// Priority: 1) Same day slots first, 2) Then by closest time difference\navailableSlots.sort((a, b) => {\n  // Same day slots get priority\n  if (a.isSameDay && !b.isSameDay) return -1;\n  if (!a.isSameDay && b.isSameDay) return 1;\n  \n  // Then sort by time difference\n  return a.timeDifference - b.timeDifference;\n});\n\n// Get top 3 closest available times\nconst top3Slots = availableSlots.slice(0, 3);\n\n// Format output for response\nconst suggestedTimes = top3Slots.map(slot => ({\n  startTime: slot.startTime,\n  endTime: slot.endTime,\n  formatted: slot.formatted\n}));\n\nreturn {\n  json: {\n    suggestedTimes: suggestedTimes,\n    requestedTime: requestedTime.toISOString(),\n    totalSlotsFound: availableSlots.length,\n    searchedDays: searchRangeDays,\n    appointmentDuration: appointmentDuration\n  }\n};"
+      },
+      "id": "e7fce28f-56b8-42cc-8c2d-a5e832e5c785",
+      "name": "Find 3 Closest Available Times",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2e09f3ca",
+              "name": "status",
+              "value": "unavailable",
+              "type": "string"
+            },
+            {
+              "id": "33073338",
+              "name": "suggestedTimes",
+              "value": "={{ $json.suggestedTimes }}",
+              "type": "array"
+            },
+            {
+              "id": "cbfbbdb4",
+              "name": "message",
+              "value": "The requested time is not available. Here are the 3 closest alternative times.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ebd318ed-ddfe-4934-bb31-5d68f3e2440d",
+      "name": "Format Alternative Times Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        384,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "e755d0db-ec73-4795-a353-2638410ebcc6",
+      "name": "Return Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        608,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "retell-cancel-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "3af06fbd-ba03-4926-8252-34bfb0d3029a",
+      "name": "Cancel",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -960,
+        512
+      ],
+      "webhookId": "9d5f5071"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "limit": 10,
+        "options": {
+          "timeMin": "={{ new Date().toISOString() }}",
+          "singleEvents": true,
+          "orderBy": "startTime",
+          "query": "={{ $json.body.phone_number }}"
+        }
+      },
+      "id": "512cf3ac-1117-4347-aad0-b590e4e67c36",
+      "name": "Google Calendar - Search by Phone",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        -736,
+        512
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "108a7e09",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "45abe84f-cf8b-4363-8ee3-1cfbc0140f65",
+      "name": "IF - Event Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -512,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "eventId": "={{ $json.id }}",
+        "options": {}
+      },
+      "id": "c6837d35-19c0-45d9-9ca6-9d8e120cf511",
+      "name": "Google Calendar - Cancel Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        -288,
+        416
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ \"result\": \"Your appointment has been successfully cancelled. You're all set!\" }) }}",
+        "options": {}
+      },
+      "id": "58c68bce-ac0a-4059-a915-215624f63c46",
+      "name": "Respond - Cancelled OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -64,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ \"result\": \"I wasn't able to find an upcoming appointment for your phone number. Could you verify the number on file or check with the office?\" }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "a317a7f5-2968-4fea-ae74-658b609c649b",
+      "name": "Respond - Not Found",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -288,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reschedule-appointment",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "6b950a3c-444d-4560-86a6-42b716a6affc",
+      "name": "Reschedule",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -960,
+        1024
+      ],
+      "webhookId": "44076d7d"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f0001e7a",
+              "name": "phoneNumber",
+              "value": "={{ $json.body.number }}",
+              "type": "string"
+            },
+            {
+              "id": "3bb3dd87",
+              "name": "startTime",
+              "value": "={{ $json.body.startTime }}",
+              "type": "string"
+            },
+            {
+              "id": "a5caa125",
+              "name": "endTime",
+              "value": "={{ $json.body.endTime }}",
+              "type": "string"
+            },
+            {
+              "id": "74f6e900",
+              "name": "requestedStartTime",
+              "value": "={{ $json.body.startTime }}",
+              "type": "string"
+            },
+            {
+              "id": "36322f6f",
+              "name": "dateRangeStart",
+              "value": "={{ new Date(new Date($json.body.startTime).getTime() - 7 * 24 * 60 * 60 * 1000).toISOString() }}",
+              "type": "string"
+            },
+            {
+              "id": "242d257a",
+              "name": "dateRangeEnd",
+              "value": "={{ new Date(new Date($json.body.startTime).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "facc2cc5-4312-493d-882f-7dba31dedf7c",
+      "name": "Workflow Configuration1",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -736,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "timeMin": "={{ $json.body.startTime }}",
+        "timeMax": "={{ $json.body.endTime }}",
+        "options": {}
+      },
+      "id": "24228042-7855-41c9-90ff-f24a319d85bd",
+      "name": "Check Availability1",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -512,
+        1024
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "dffd8f30",
+              "leftValue": "={{ $json.available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "65d36da9-0f3f-4042-a42a-5ed2f3b2dedb",
+      "name": "Is Slot Available?1",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -288,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "returnAll": true,
+        "timeMin": "={{ new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString() }}",
+        "timeMax": "={{ new Date(new Date().getTime() + 90 * 24 * 60 * 60 * 1000).toISOString() }}",
+        "options": {
+          "query": "={{ $('Workflow Configuration1').first().json.phoneNumber }}"
+        }
+      },
+      "id": "bcf25a9a-fc8a-4730-a34e-e32d8546a5c7",
+      "name": "Find Existing Appointment",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        928
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "2407356c",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b6ce2134-ca2b-4c34-95e9-2c3d0f4f4b06",
+      "name": "Appointment Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        160,
+        928
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "eventId": "={{ $json.id }}",
+        "updateFields": {
+          "end": "={{ $('Workflow Configuration1').first().json.endTime }}",
+          "start": "={{ $('Workflow Configuration1').first().json.startTime }}"
+        }
+      },
+      "id": "2db76a79-a96a-467d-a551-159c45e37ae0",
+      "name": "Update Appointment",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        384,
+        832
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": true, \"message\": \"Appointment successfully rescheduled\", \"newStartTime\": $('Workflow Configuration1').first().json.startTime, \"newEndTime\": $('Workflow Configuration1').first().json.endTime } }}",
+        "options": {}
+      },
+      "id": "7f643bcd-43eb-4820-87bd-700c3ec8d23f",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        608,
+        832
+      ]
+    },
+    {
+      "parameters": {
+        "enableResponseOutput": true,
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": false, \"message\": \"No matching appointment found for the provided phone number\" } }}",
+        "options": {}
+      },
+      "id": "08d1064e-c549-460f-aa3e-83c31a6dc753",
+      "name": "No Appointment Found Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        384,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "hello@simpleshift.ai",
+          "mode": "list",
+          "cachedResultName": "hello@simpleshift.ai"
+        },
+        "returnAll": true,
+        "timeMin": "={{ new Date(new Date($('Workflow Configuration1').first().json.startTime).getTime() - 7 * 24 * 60 * 60 * 1000).toISOString() }}",
+        "timeMax": "={{ new Date(new Date($('Workflow Configuration1').first().json.startTime).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString() }}",
+        "options": {}
+      },
+      "id": "17c07a9e-24a7-4bf3-b8ef-9a075345d973",
+      "name": "Get Events in Range",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -64,
+        1216
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "BxQoTuZajdsADPPC",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get configuration from Workflow Configuration node\nconst config = $('Workflow Configuration1').first().json;\nconst requestedStartTime = new Date(config.requestedStartTime);\nconst dateRangeStart = new Date(config.dateRangeStart);\nconst dateRangeEnd = new Date(config.dateRangeEnd);\nconst slotDuration = 60; // 60 minutes\n\n// Get booked events from Get Events in Range node\nconst bookedEvents = $input.all().map(item => ({\n  start: new Date(item.json.start.dateTime || item.json.start.date),\n  end: new Date(item.json.end.dateTime || item.json.end.date)\n}));\n\n// Function to check if a slot overlaps with any booked event\nfunction isSlotAvailable(slotStart, slotEnd) {\n  return !bookedEvents.some(event => {\n    return (slotStart < event.end && slotEnd > event.start);\n  });\n}\n\n// Generate all possible slots on the hour within the date range\nconst availableSlots = [];\nlet currentSlot = new Date(dateRangeStart);\n\n// Round to next hour\ncurrentSlot.setMinutes(0, 0, 0);\nif (currentSlot < dateRangeStart) {\n  currentSlot.setHours(currentSlot.getHours() + 1);\n}\n\nwhile (currentSlot < dateRangeEnd) {\n  const slotEnd = new Date(currentSlot.getTime() + slotDuration * 60000);\n  \n  if (slotEnd <= dateRangeEnd && isSlotAvailable(currentSlot, slotEnd)) {\n    availableSlots.push({\n      start: new Date(currentSlot),\n      end: new Date(slotEnd)\n    });\n  }\n  \n  currentSlot.setHours(currentSlot.getHours() + 1);\n}\n\n// Find the 3 closest alternatives to the requested start time\nconst slotsWithDistance = availableSlots.map(slot => ({\n  ...slot,\n  distance: Math.abs(slot.start - requestedStartTime)\n}));\n\nslotsWithDistance.sort((a, b) => a.distance - b.distance);\n\nconst closestSlots = slotsWithDistance.slice(0, 3).map(slot => ({\n  start: slot.start.toISOString(),\n  end: slot.end.toISOString()\n}));\n\nreturn [{\n  json: {\n    requestedTime: requestedStartTime.toISOString(),\n    alternativeSlots: closestSlots,\n    totalAvailableSlots: availableSlots.length\n  }\n}];"
+      },
+      "id": "2c32152a-23b2-4f5f-8c35-7f43a0f0f534",
+      "name": "Calculate Available Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        1216
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"success\": false, \"message\": \"Requested time slot is not available\", \"alternativeSlots\": $json.alternativeSlots, \"totalAvailableSlots\": $json.totalAvailableSlots } }}",
+        "options": {}
+      },
+      "id": "cc91b451-2641-45bc-b3eb-4ac9a491df42",
+      "name": "Alternative Slots Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        384,
+        1216
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "log-appointment",
+        "options": {}
+      },
+      "id": "0fa7d06a-ad92-4a1f-bea0-8fc2a8a4765e",
+      "name": "Log",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -960,
+        1440
+      ],
+      "webhookId": "99752dd1"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "18n805S-5voFM09ju21phxwYFmYTI6F0kTPpnTLlKXHw",
+          "mode": "list",
+          "cachedResultName": "Anthonys Salon",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/18n805S-5voFM09ju21phxwYFmYTI6F0kTPpnTLlKXHw/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.body.name }}",
+            "Number": "={{ $json.body.number }}",
+            "Summary": "={{ $json.body.summary }}",
+            "Barber": "={{ $json.body.barber }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Number",
+              "displayName": "Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Barber",
+              "displayName": "Barber",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Summary",
+              "displayName": "Summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "53da14d6-67cc-40bd-95f7-94c6a5a2b3e9",
+      "name": "Append row in sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -736,
+        1440
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0Rtuq1D7HC4m1r9I",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Check & Book": {
+      "main": [
+        [
+          {
+            "node": "Workflow Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Configuration": {
+      "main": [
+        [
+          {
+            "node": "Get availability in a calendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get availability in a calendar": {
+      "main": [
+        [
+          {
+            "node": "Is Slot Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Slot Available?": {
+      "main": [
+        [
+          {
+            "node": "Book Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Appointment": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Events": {
+      "main": [
+        [
+          {
+            "node": "Find 3 Closest Available Times",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find 3 Closest Available Times": {
+      "main": [
+        [
+          {
+            "node": "Format Alternative Times Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Alternative Times Response": {
+      "main": [
+        [
+          {
+            "node": "Return Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar - Search by Phone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar - Search by Phone": {
+      "main": [
+        [
+          {
+            "node": "IF - Event Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Event Found?": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar - Cancel Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond - Not Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar - Cancel Event": {
+      "main": [
+        [
+          {
+            "node": "Respond - Cancelled OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reschedule": {
+      "main": [
+        [
+          {
+            "node": "Workflow Configuration1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Configuration1": {
+      "main": [
+        [
+          {
+            "node": "Check Availability1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Availability1": {
+      "main": [
+        [
+          {
+            "node": "Is Slot Available?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Slot Available?1": {
+      "main": [
+        [
+          {
+            "node": "Find Existing Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Events in Range",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Existing Appointment": {
+      "main": [
+        [
+          {
+            "node": "Appointment Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Appointment Found?": {
+      "main": [
+        [
+          {
+            "node": "Update Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Appointment Found Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Appointment": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Events in Range": {
+      "main": [
+        [
+          {
+            "node": "Calculate Available Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Available Slots": {
+      "main": [
+        [
+          {
+            "node": "Alternative Slots Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "4f7cf8a1-9d70-4b83-9b5d-2c325bb2cbb3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7f3dfac67b6bc739a945d91d0361c34bc696638ecb581504d551324679321386"
+  },
+  "id": "XAVf8fwzHOYLjqPE",
+  "tags": []
+}

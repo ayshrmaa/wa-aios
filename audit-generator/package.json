@@ -1,0 +1,14 @@
+{
+  "name": "wa-aios-audit-generator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node --check generate.mjs && node --check verify.mjs",
+    "build:audit": "node generate.mjs example-input.json output/pdf/atelier-nova-audit.pdf",
+    "verify:audit": "node verify.mjs output/pdf/atelier-nova-audit.pdf"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

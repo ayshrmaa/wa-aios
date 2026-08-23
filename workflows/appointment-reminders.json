@@ -1,0 +1,390 @@
+{
+  "name": "WA AIOS - Appointment Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "2f955fc2-8dfb-41c7-8df1-537d1ffb6126",
+      "name": "Every 5 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -980,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with original as (\n  select a.tenant_id::text, a.id::text as appointment_id, a.contact_id::text, a.starts_at, a.service, a.staff,\n         t.timezone, t.quiet_hours, t.messaging_config,\n         step.template_id, step.channel,\n         case when step.channel='email' then c.email else c.phone_e164 end as recipient,\n         step.due_at\n  from appointments a join contacts c on c.id=a.contact_id join tenants t on t.id=a.tenant_id\n  cross join lateral (values\n    ('appointment_t_48h','whatsapp',a.starts_at-interval '48 hours'),\n    ('appointment_t_24h','email',a.starts_at-interval '24 hours'),\n    ('appointment_t_2h','whatsapp',a.starts_at-interval '2 hours')\n  ) step(template_id,channel,due_at)\n  where a.status='booked' and step.due_at between now()-interval '5 minutes' and now()\n    and ((step.channel='whatsapp' and c.whatsapp_consent) or (step.channel='email' and c.email_consent))\n    and not exists (select 1 from messages m where m.appointment_id=a.id and m.template_id=step.template_id)\n    and not exists (select 1 from sequence_runs sr where sr.appointment_id=a.id and sr.sequence_type='appointment_reminder' and sr.current_step=step.template_id and sr.status='active')\n), deferred as (\n  select sr.tenant_id::text, sr.appointment_id::text, sr.contact_id::text, a.starts_at, a.service, a.staff,\n         t.timezone, t.quiet_hours, t.messaging_config, sr.current_step as template_id,\n         sr.metadata->>'channel' as channel, sr.metadata->>'recipient' as recipient, sr.next_fire_at as due_at\n  from sequence_runs sr join appointments a on a.id=sr.appointment_id join tenants t on t.id=sr.tenant_id\n  where sr.sequence_type='appointment_reminder' and sr.status='active' and sr.next_fire_at between now()-interval '5 minutes' and now()\n), candidates as (\n  select * from original union all select * from deferred\n)\nselect * from candidates",
+        "options": {}
+      },
+      "id": "2a1f6dc2-c51d-41a0-8ccb-2b121445e72b",
+      "name": "Find Due Reminders",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -760,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst now = new Date();\nreturn $input.all().map(item => {\n  const j = item.json;\n  const quiet = typeof j.quiet_hours === 'string' ? JSON.parse(j.quiet_hours) : j.quiet_hours;\n  const messaging = typeof j.messaging_config === 'string' ? JSON.parse(j.messaging_config) : j.messaging_config;\n  const quietNow = isQuiet(now, j.timezone, quiet);\n  let action = 'send', deferredUntil = null;\n  if (quietNow && j.template_id === 'appointment_t_2h') action = 'drop';\n  else if (quietNow) {\n    action = 'defer';\n    const p = parts(now, j.timezone), [eh,em] = quiet.end.split(':').map(Number);\n    const current = Number(p.hour)*60+Number(p.minute), target=eh*60+em;\n    const minutes = current < target ? target-current : (1440-current)+target;\n    deferredUntil = new Date(now.getTime()+minutes*60000).toISOString();\n  }\n  const body = j.body || ('Reminder: ' + j.service + ' with ' + j.staff + ' at ' + new Date(j.starts_at).toLocaleString('de-CH',{timeZone:j.timezone}));\n  return {json:{...j, messaging, action, deferredUntil, body, transportPayload:{tenantId:j.tenant_id,channel:j.channel,to:j.recipient,templateId:j.template_id,body}}};\n});"
+      },
+      "id": "3a47f8f7-d956-44ec-874a-1ef305f61e9f",
+      "name": "Apply Quiet Hours",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "46b10e3a-b1e4-46ff-8702-bf719ce72481",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "send",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6baf0fce-f7c3-4245-83fb-b86bd39affbd",
+      "name": "Reminder Can Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "a3c458bc-19e1-42cc-8e09-fe5a465d5198",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "drop",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "657ed361-8911-4cb3-89dd-8f0c763d3c7c",
+      "name": "Reminder Is T2 Drop?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "edd0dad9-5cd4-42b0-8899-78e5ba4878b9",
+              "leftValue": "={{ $json.messaging.mode }}",
+              "rightValue": "live",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3c434188-02a1-4511-8832-5af39fbde8e0",
+      "name": "Messaging Transport Live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MESSAGING_TRANSPORT_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MESSAGING_TRANSPORT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.transportPayload) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "95a0019b-8af0-4fdc-8325-2e05619fe178",
+      "name": "Send via Messaging Adapter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        -180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.warn('[WA AIOS STUB] Outbound transport is disabled. Would send:', JSON.stringify($json.transportPayload)); return $input.all().map(i=>({json:{...i.json,delivery_status:'stubbed'}}));"
+      },
+      "id": "fee9bdc8-a5a6-4488-8ce8-f48fa9d6852d",
+      "name": "LOUD STUB Reminder Send",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with message_row as (\n  insert into messages (tenant_id,contact_id,appointment_id,channel,direction,body,template_id,delivery_status,sent_at)\n  values ($1::uuid,$2::uuid,$3::uuid,$4,'outbound',$5,$6,$7,now()) returning id\n), completed as (\n  update sequence_runs set status='completed',exit_reason='sent',next_fire_at=null\n  where appointment_id=$3::uuid and sequence_type='appointment_reminder' and current_step=$6 and status='active'\n)\nselect id::text from message_row",
+        "options": {
+          "queryReplacement": "={{ [$('Apply Quiet Hours').item.json.tenant_id,$('Apply Quiet Hours').item.json.contact_id,$('Apply Quiet Hours').item.json.appointment_id,$('Apply Quiet Hours').item.json.channel,$('Apply Quiet Hours').item.json.body,$('Apply Quiet Hours').item.json.template_id,$json.delivery_status || 'sent'] }}"
+        }
+      },
+      "id": "d0b7bb26-00e0-48d5-866d-ce8ef8719651",
+      "name": "Log Reminder Send",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        360,
+        -100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into messages (tenant_id,contact_id,appointment_id,channel,direction,body,template_id,delivery_status)\nvalues ($1::uuid,$2::uuid,$3::uuid,$4,'outbound',$5,$6,'dropped_quiet_hours') returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id,$json.contact_id,$json.appointment_id,$json.channel,$json.body,$json.template_id] }}"
+        }
+      },
+      "id": "3c1c58ac-cef5-4af3-872c-b2bfcb1f7371",
+      "name": "Log Dropped T2 Reminder",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        120,
+        120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into sequence_runs (tenant_id,contact_id,appointment_id,sequence_type,status,current_step,next_fire_at,metadata)\nvalues ($1::uuid,$2::uuid,$3::uuid,'appointment_reminder','active',$4,$5::timestamptz,$6::jsonb) returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id,$json.contact_id,$json.appointment_id,$json.template_id,$json.deferredUntil,JSON.stringify({channel:$json.channel,recipient:$json.recipient,body:$json.body})] }}"
+        }
+      },
+      "id": "c70a6099-2fa4-4050-8fbc-1e32f8d5f231",
+      "name": "Defer Reminder to Open Window",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        120,
+        260
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 5 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Find Due Reminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due Reminders": {
+      "main": [
+        [
+          {
+            "node": "Apply Quiet Hours",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Quiet Hours": {
+      "main": [
+        [
+          {
+            "node": "Reminder Can Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reminder Can Send?": {
+      "main": [
+        [
+          {
+            "node": "Messaging Transport Live?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reminder Is T2 Drop?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Messaging Transport Live?": {
+      "main": [
+        [
+          {
+            "node": "Send via Messaging Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LOUD STUB Reminder Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send via Messaging Adapter": {
+      "main": [
+        [
+          {
+            "node": "Log Reminder Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LOUD STUB Reminder Send": {
+      "main": [
+        [
+          {
+            "node": "Log Reminder Send",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reminder Is T2 Drop?": {
+      "main": [
+        [
+          {
+            "node": "Log Dropped T2 Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Defer Reminder to Open Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  },
+  "versionId": "6f8de72e-862b-479a-83ae-70b0e059cbfc",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

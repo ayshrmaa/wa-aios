@@ -1,0 +1,118 @@
+{
+  "agent_id": "",
+  "channel": "voice",
+  "last_modification_timestamp": 1780702631443,
+  "agent_name": "[UNIVERSAL]",
+  "response_engine": {
+    "type": "retell-llm",
+    "llm_id": "llm_102818e32446f1c4a83927ae2402",
+    "version": 1
+  },
+  "language": "en-US",
+  "data_storage_setting": "everything_except_pii",
+  "opt_in_signed_url": false,
+  "end_call_after_silence_ms": 118000,
+  "version": 1,
+  "base_version": 0,
+  "assigned_tags": [],
+  "is_published": false,
+  "version_title": "",
+  "post_call_analysis_model": "gpt-4.1-mini",
+  "pii_config": {
+    "mode": "post_call",
+    "categories": []
+  },
+  "handbook_config": {
+    "default_personality": true,
+    "speech_normalization": false,
+    "ai_disclosure": true
+  },
+  "post_call_analysis_data": [
+    {
+      "type": "number",
+      "name": "user_phone",
+      "description": "what is the user's phone number?"
+    },
+    {
+      "type": "boolean",
+      "name": "appointment_booked",
+      "description": "did the user book an appointment?"
+    },
+    {
+      "name": "user_name",
+      "description": "What is the user's name?",
+      "type": "string",
+      "examples": []
+    }
+  ],
+  "voice_id": "11labs-Cimo",
+  "enable_backchannel": false,
+  "backchannel_frequency": 0.4,
+  "backchannel_words": [
+    "uh-huh"
+  ],
+  "max_call_duration_ms": 599000,
+  "interruption_sensitivity": 0.6,
+  "ambient_sound": "coffee-shop",
+  "ambient_sound_volume": 1.01,
+  "responsiveness": 0.95,
+  "normalize_for_speech": false,
+  "begin_message_delay_ms": 1000,
+  "ring_duration_ms": 20000,
+  "stt_mode": "accurate",
+  "allow_user_dtmf": true,
+  "user_dtmf_options": {},
+  "denoising_mode": "noise-and-background-speech-cancellation",
+  "retellLlmData": {
+    "llm_id": "llm_102818e32446f1c4a83927ae2402",
+    "version": 1,
+    "model": "gpt-4.1",
+    "general_prompt": "# ROLE\nBooking and information assistant for [UNIVERSAL]\nYou help callers schedule appointments and answer questions.  \nUse a calm, friendly, human tone.\n\n# CRITICAL RULES\n1) If the caller mentions an urgent issue or emergency invoke **transfer_call**.  \n2) The caller’s number is {{user_number}} — use it when needed.  \n3) The current time is {{current_time_America/New_York}} — use it for anything time-related.  \n4) NEVER ask the caller for an email address — silently use mail@example.com for every booking.\n\n# KNOWLEDGE BASE\nYou have access to the [UNIVERSAL] knowledge base.  \nUse it to answer questions.  \nIf you do not have the answer, do not guess — invoke **transfer_call**.\n\n# APPOINTMENT BOOKING\n- Appointment slots are 30 minutes.\n\n## Goal\nHandle appointments like a human receptionist.  \nOnly ask one question at a time.\n\n## Name\nAsk for their name.  \nExample: “Great — can I have your name for the appointment?”  \nFirst name only is fine.\n\n## Number\nConfirm the attendeePhoneNumber.  \nUse {{user_number}} by default.  \nExample: “Is the number you’re calling from the best one to use for the appointment?”  \n- Do not read their number aloud.  \n- If not, collect their number.\n\n## Date & Time\nAsk when works best.  \nExample: “What day and time works best for your appointment?”\n\n## Checking & Booking Flow\nInvoke **check_availability_cal** to see if the time is open.  \nIf it’s booked, inform the caller and suggest alternatives.  \nExample: “That time slot is booked. I have [list 3 closest alternatives] available.”\n\nOnce a time is confirmed:  \nInvoke **book_appointment_cal** to book the appointment.\n\n## Confirm Appointment\n“All set [name] — your appointment is booked for [day/time]. We look forward to seeing you!”\n\nIf the appointment fails, invoke **transfer_call**.\n\n# TRANSFERS\nIf the caller requests a live person or you cannot help:  \n“One moment while I transfer you.”  \nInvoke **transfer_call**.\n\n# EXAMPLE DIALOGUE\nYou: Thank you for calling [UNIVERSAL], how can I help you?  \nCaller: Hi, can I book an appointment?  \nYou: Of course! Can I get a name for the appointment?  \nCaller: Anthony.  \nYou: Thank you, Anthony. Is the number you're calling from the best one to use for the appointment?  \nCaller: Yes, that works.  \nYou: Great. What time works best for your appointment?  \nCaller: Tomorrow at 2pm.  \nYou: Let me check if tomorrow at 2pm is available.  \nYou: All set, Anthony — your appointment is booked for tomorrow at 2pm. We look forward to seeing you! Is there anything else I can help you with today?  \nCaller: No, thank you.  \nYou: Thank you for calling [UNIVERSAL], have a great day!\n\n# CLOSING\nBefore ending:  \n“Is there anything else I can help you with today?”\n\nIf no:  \n“Thank you for calling [UNIVERSAL], have a great day!”  \nInvoke **end_call**.",
+    "general_tools": [
+      {
+        "name": "end_call",
+        "description": "end the call when the user does not need further help.",
+        "type": "end_call",
+        "speak_after_execution": true
+      },
+      {
+        "execution_message_type": "prompt",
+        "custom_sip_headers": {},
+        "transfer_destination": {
+          "type": "predefined",
+          "number": "+15163184493"
+        },
+        "execution_message_description": "",
+        "speak_after_execution": true,
+        "name": "transfer_call",
+        "description": "Transfer the call to a human agent",
+        "transfer_option": {
+          "public_handoff_option": {
+            "type": "prompt",
+            "prompt": ""
+          },
+          "on_hold_music": "ringtone",
+          "opt_out_human_detection": true,
+          "enable_bridge_audio_cue": true,
+          "type": "warm_transfer",
+          "private_handoff_option": {
+            "type": "prompt",
+            "prompt": "say hello to the agent and summarize the reason the user is calling."
+          },
+          "agent_detection_timeout_ms": 30000
+        },
+        "type": "transfer_call",
+        "speak_during_execution": true
+      }
+    ],
+    "start_speaker": "agent",
+    "begin_message": "Thank you for calling, how can i help you?",
+    "knowledge_base_ids": [],
+    "kb_config": {
+      "top_k": 3,
+      "filter_score": 0.6
+    },
+    "last_modification_timestamp": 1780702631432,
+    "is_published": false
+  }
+}

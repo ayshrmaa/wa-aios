@@ -1,0 +1,21 @@
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+
+# dependencies & builds
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# local databases & generated artefacts
+**/data/pglite/
+audit-generator/output/
+proofshot-artifacts/
+
+# os
+.DS_Store

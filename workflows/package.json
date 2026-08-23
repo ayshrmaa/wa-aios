@@ -1,0 +1,11 @@
+{
+  "name": "wa-aios-workflows",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-workflows.mjs",
+    "validate": "node validate.mjs",
+    "validate:contract": "node validate-contract.mjs",
+    "demo": "node demo-runner.mjs"
+  }
+}

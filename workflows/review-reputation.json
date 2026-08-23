@@ -1,0 +1,552 @@
+{
+  "name": "WA AIOS - Review Requests and Rating Gate",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "d5c59597-992a-48e8-8124-ae37bcd615b1",
+      "name": "Every 10 Minutes Review Requests",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -980,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with original as (\nselect a.tenant_id::text,a.id::text appointment_id,a.contact_id::text,a.service,c.phone_e164 recipient,\n t.timezone,t.quiet_hours,t.messaging_config,t.review_config\nfrom appointments a join contacts c on c.id=a.contact_id join tenants t on t.id=a.tenant_id\nwhere a.status='completed'\nand a.ends_at + ((t.review_config->>'delayHours')::int * interval '1 hour') between now()-interval '10 minutes' and now()\nand c.whatsapp_consent\nand not exists(select 1 from reviews r where r.appointment_id=a.id)\nand not exists(select 1 from sequence_runs sr where sr.appointment_id=a.id and sr.sequence_type='review_request' and sr.status='active')\n), deferred as (\n select sr.tenant_id::text,sr.appointment_id::text,sr.contact_id::text,a.service,c.phone_e164 recipient,\n        t.timezone,t.quiet_hours,t.messaging_config,t.review_config\n from sequence_runs sr join appointments a on a.id=sr.appointment_id join contacts c on c.id=sr.contact_id join tenants t on t.id=sr.tenant_id\n where sr.sequence_type='review_request' and sr.status='active' and sr.next_fire_at between now()-interval '10 minutes' and now()\n)\nselect * from original union all select * from deferred",
+        "options": {}
+      },
+      "id": "f9ea4846-f835-4165-84de-d99945c468ee",
+      "name": "Find Due Review Requests",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -760,
+        -220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst now=new Date(); return $input.all().map(i=>{const j=i.json, q=typeof j.quiet_hours==='string'?JSON.parse(j.quiet_hours):j.quiet_hours, m=typeof j.messaging_config==='string'?JSON.parse(j.messaging_config):j.messaging_config; const quiet=isQuiet(now,j.timezone,q); const body='How was your visit? Reply with a rating from 1 to 5.'; return {json:{...j,messaging:m,action:quiet?'defer':'send',body,template_id:'review_rating_request',channel:'whatsapp',transportPayload:{tenantId:j.tenant_id,channel:'whatsapp',to:j.recipient,templateId:'review_rating_request',body}}};});"
+      },
+      "id": "dfd1d6a7-84a7-4414-88c9-71a1d32c01de",
+      "name": "Prepare Review Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "5298f06f-b687-4051-897b-8d4783af137e",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "send",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e73d34d4-8af6-4e11-87af-1e47b2edc544",
+      "name": "Review Request Can Send?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -320,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ac49a9f7-e967-454f-8241-a6ceba1b2f78",
+              "leftValue": "={{ $json.messaging.mode }}",
+              "rightValue": "live",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a2dd2921-def0-41b2-8243-26b449c5e0d0",
+      "name": "Review Transport Live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.MESSAGING_TRANSPORT_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.MESSAGING_TRANSPORT_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.transportPayload) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "a2b75641-47e8-4424-8afb-f61101f44739",
+      "name": "Send Review Request via Adapter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        120,
+        -380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "console.warn('[WA AIOS STUB] Would request review:',JSON.stringify($json.transportPayload)); return $input.all().map(i=>({json:{...i.json,delivery_status:'stubbed'}}));"
+      },
+      "id": "b135555c-7295-4bf2-834b-c68558fc682c",
+      "name": "LOUD STUB Review Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        120,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with review_row as (\n insert into reviews(tenant_id,contact_id,appointment_id,requested_at) values($1::uuid,$2::uuid,$3::uuid,now()) returning id\n), message_row as (\n insert into messages(tenant_id,contact_id,appointment_id,channel,direction,body,template_id,delivery_status,sent_at)\n values($1::uuid,$2::uuid,$3::uuid,'whatsapp','outbound',$4,'review_rating_request',$5,now())\n), completed as (\n update sequence_runs set status='completed',exit_reason='sent',next_fire_at=null\n where appointment_id=$3::uuid and sequence_type='review_request' and status='active'\n)\nselect id::text from review_row",
+        "options": {
+          "queryReplacement": "={{ [ $('Prepare Review Request').item.json.tenant_id,$('Prepare Review Request').item.json.contact_id,$('Prepare Review Request').item.json.appointment_id,$('Prepare Review Request').item.json.body,$json.delivery_status||'sent' ] }}"
+        }
+      },
+      "id": "67f85029-d51e-40f7-8a75-453c7bf62eb0",
+      "name": "Create Review and Log Request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        340,
+        -300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "insert into sequence_runs(tenant_id,contact_id,appointment_id,sequence_type,status,current_step,next_fire_at,metadata)\nvalues($1::uuid,$2::uuid,$3::uuid,'review_request','active','rating_request',((date_trunc('day',now() at time zone $4)+interval '1 day 8 hours') at time zone $4),jsonb_build_object('quiet_hours_deferred',true)) returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$json.tenant_id,$json.contact_id,$json.appointment_id,$json.timezone] }}"
+        }
+      },
+      "id": "4b1accac-a9c1-43d6-87e1-5cebc6d4f47c",
+      "name": "Defer Review Request",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -100,
+        -120
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "review-rating",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "39fabb0a-65b3-40aa-845f-f369900a98a5",
+      "name": "Receive Rating",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -980,
+        220
+      ],
+      "webhookId": "923463ab-a18e-4dcb-841c-f7de53382409"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select r.id::text review_id,r.tenant_id::text,r.contact_id::text,r.appointment_id::text,t.review_config,t.messaging_config,t.quiet_hours,t.timezone\nfrom reviews r join tenants t on t.id=r.tenant_id where r.tenant_id=$1::uuid and r.appointment_id=$2::uuid limit 1",
+        "options": {
+          "queryReplacement": "={{ [$json.body.tenant_id,$json.body.appointment_id] }}"
+        }
+      },
+      "id": "197efe45-a971-481b-8c26-650530f3c8d7",
+      "name": "Load Review Gate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -760,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nfunction parts(date, timezone) {\n  return Object.fromEntries(new Intl.DateTimeFormat('en-CA', {\n    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',\n    weekday: 'long', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'\n  }).formatToParts(date).filter(p => p.type !== 'literal').map(p => [p.type, p.value]));\n}\nfunction dateKey(date, timezone) {\n  const p = parts(date, timezone);\n  return p.year + '-' + p.month + '-' + p.day;\n}\nfunction addUtcDays(date, days) {\n  const next = new Date(date);\n  next.setUTCDate(next.getUTCDate() + days);\n  return next;\n}\nfunction easterSunday(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100;\n  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);\n  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451);\n  const month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return new Date(Date.UTC(year, month - 1, day));\n}\nfunction holidaySet(year, region) {\n  const easter = easterSunday(year);\n  const dates = [\n    year + '-01-01', year + '-08-01', year + '-12-25', year + '-12-26',\n    addUtcDays(easter, -2).toISOString().slice(0, 10),\n    addUtcDays(easter, 1).toISOString().slice(0, 10),\n    addUtcDays(easter, 39).toISOString().slice(0, 10),\n    addUtcDays(easter, 50).toISOString().slice(0, 10)\n  ];\n  if (region === 'ZH') dates.push(year + '-01-02', year + '-05-01');\n  return new Set(dates);\n}\nfunction isQuiet(date, timezone, quiet) {\n  const p = parts(date, timezone);\n  const minutes = Number(p.hour) * 60 + Number(p.minute);\n  const [sh, sm] = quiet.start.split(':').map(Number);\n  const [eh, em] = quiet.end.split(':').map(Number);\n  const start = sh * 60 + sm, end = eh * 60 + em;\n  return start > end ? minutes >= start || minutes < end : minutes >= start && minutes < end;\n}\n\nconst j=$input.first().json,b=$('Receive Rating').first().json.body||{},cfg=typeof j.review_config==='string'?JSON.parse(j.review_config):j.review_config;\nconst rating=Math.max(1,Math.min(5,Number(b.rating))), publicRoute=!cfg.gateEnabled||rating>=Number(cfg.threshold||4);\nreturn [{json:{...j,rating,publicRoute,route:publicRoute?'google':'private',link:publicRoute?cfg.googleReviewUrl:cfg.privateFeedbackUrl,feedback:String(b.feedback||''),ownerEmail:cfg.ownerAlertEmail,quiet:isQuiet(new Date(),j.timezone,typeof j.quiet_hours==='string'?JSON.parse(j.quiet_hours):j.quiet_hours)}}];"
+      },
+      "id": "5cd2bde9-f876-457a-8b3a-100609469434",
+      "name": "Apply Rating Gate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "update reviews set rating=$2::int,routed_to=$3,received_at=now(),private_feedback=nullif($4,'') where id=$1::uuid returning id::text",
+        "options": {
+          "queryReplacement": "={{ [$json.review_id,$json.rating,$json.route,$json.feedback] }}"
+        }
+      },
+      "id": "b3a52440-d170-4c52-86c8-0ae8443e959f",
+      "name": "Save Rating",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -320,
+        220
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "09083357-597a-4646-8483-266037ebb072",
+              "leftValue": "={{ $('Apply Rating Gate').first().json.publicRoute }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "07992198-a3d5-4e4a-8a4f-484cae50d4c7",
+      "name": "Public Review Route?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status:'received', routedTo:'google', link:$('Apply Rating Gate').first().json.link } }}",
+        "options": {}
+      },
+      "id": "bbd20b3b-02e4-4ee1-8c2c-7b20b0da5092",
+      "name": "Return Google Review Link",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        120,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "with complaint_row as (\n insert into complaints(tenant_id,contact_id,source_channel,detected_category,severity,body,notified_at)\n values($1::uuid,$2::uuid,'review','low_rating','high',$3,case when $4::boolean then null else now() end) returning id\n), message_row as (\n insert into messages(tenant_id,contact_id,appointment_id,channel,direction,body,template_id,delivery_status,sent_at)\n values($1::uuid,$2::uuid,$5::uuid,'email','outbound',$6,'owner_low_rating_alert',case when $4::boolean then 'queued' else 'stubbed' end,case when $4::boolean then null else now() end)\n)\nselect id::text from complaint_row",
+        "options": {
+          "queryReplacement": "={{ [ $('Apply Rating Gate').first().json.tenant_id,$('Apply Rating Gate').first().json.contact_id,$('Apply Rating Gate').first().json.feedback,$('Apply Rating Gate').first().json.quiet,$('Apply Rating Gate').first().json.appointment_id,'[WA AIOS] Low rating received. Owner alert transport is ' + ($('Apply Rating Gate').first().json.quiet?'deferred for quiet hours.':'stubbed until configured.') ] }}"
+        }
+      },
+      "id": "2657e9ea-6380-43e8-8c4e-fa8b776e44bb",
+      "name": "Create Private Feedback Alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        120,
+        300
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "REPLACE_WITH_POSTGRES_CREDENTIAL_ID",
+          "name": "WA AIOS Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status:'received', routedTo:'private', link:$('Apply Rating Gate').first().json.link, ownerAlert:$('Apply Rating Gate').first().json.quiet?'deferred_quiet_hours':'stubbed' } }}",
+        "options": {}
+      },
+      "id": "3db25ee1-3271-4355-869b-4e6a715745b3",
+      "name": "Return Private Feedback Link",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        340,
+        300
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every 10 Minutes Review Requests": {
+      "main": [
+        [
+          {
+            "node": "Find Due Review Requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Due Review Requests": {
+      "main": [
+        [
+          {
+            "node": "Prepare Review Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Review Request": {
+      "main": [
+        [
+          {
+            "node": "Review Request Can Send?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Request Can Send?": {
+      "main": [
+        [
+          {
+            "node": "Review Transport Live?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Defer Review Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Review Transport Live?": {
+      "main": [
+        [
+          {
+            "node": "Send Review Request via Adapter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LOUD STUB Review Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Review Request via Adapter": {
+      "main": [
+        [
+          {
+            "node": "Create Review and Log Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LOUD STUB Review Request": {
+      "main": [
+        [
+          {
+            "node": "Create Review and Log Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Rating": {
+      "main": [
+        [
+          {
+            "node": "Load Review Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Review Gate": {
+      "main": [
+        [
+          {
+            "node": "Apply Rating Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Rating Gate": {
+      "main": [
+        [
+          {
+            "node": "Save Rating",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Rating": {
+      "main": [
+        [
+          {
+            "node": "Public Review Route?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Public Review Route?": {
+      "main": [
+        [
+          {
+            "node": "Return Google Review Link",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Private Feedback Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Private Feedback Alert": {
+      "main": [
+        [
+          {
+            "node": "Return Private Feedback Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Zurich"
+  },
+  "versionId": "9581ba5e-daeb-4ded-80d6-3e0b22b48d6f",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

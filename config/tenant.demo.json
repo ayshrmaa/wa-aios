@@ -1,0 +1,147 @@
+{
+  "tenantId": "11111111-1111-4111-8111-111111111111",
+  "slug": "atelier-nova-zurich",
+  "salonName": "Atelier Nova",
+  "legalName": "Atelier Nova GmbH",
+  "locale": "de-CH",
+  "fallbackLocale": "en",
+  "timezone": "Europe/Zurich",
+  "currency": "CHF",
+  "contact": {
+    "phone": "+41 44 555 01 24",
+    "email": "hallo@atelier-nova.example",
+    "address": "Seefeldstrasse 88, 8008 Zuerich"
+  },
+  "branding": {
+    "logoText": "ATELIER NOVA",
+    "primary": "#173f35",
+    "accent": "#d8ff73",
+    "surface": "#f2f5f3",
+    "ink": "#10231e",
+    "fontDisplay": "Geist",
+    "fontBody": "Geist"
+  },
+  "avgAppointmentValueChf": 128,
+  "baselineNoShowRate": 0.12,
+  "booking": {
+    "tier": "native",
+    "platform": "google_calendar",
+    "defaultDurationMinutes": 60,
+    "slotIntervalMinutes": 30,
+    "searchRangeDays": 10,
+    "swissHolidayRegion": "ZH",
+    "staff": [
+      {
+        "id": "lea",
+        "name": "Lea",
+        "aliases": ["lea", "leah"],
+        "calendarId": "lea.atelier-nova@calendar.demo"
+      },
+      {
+        "id": "mara",
+        "name": "Mara",
+        "aliases": ["mara", "martha"],
+        "calendarId": "mara.atelier-nova@calendar.demo"
+      },
+      {
+        "id": "noemi",
+        "name": "Noemi",
+        "aliases": ["noemi", "noemie"],
+        "calendarId": "noemi.atelier-nova@calendar.demo"
+      }
+    ],
+    "hours": {
+      "monday": [],
+      "tuesday": [{ "start": "09:00", "end": "18:00" }],
+      "wednesday": [{ "start": "09:00", "end": "18:00" }],
+      "thursday": [{ "start": "10:00", "end": "20:00" }],
+      "friday": [{ "start": "09:00", "end": "18:00" }],
+      "saturday": [{ "start": "08:30", "end": "16:00" }],
+      "sunday": []
+    },
+    "closureDates": ["2026-12-24", "2026-12-31"],
+    "additionalHolidayDates": []
+  },
+  "quietHours": {
+    "start": "21:00",
+    "end": "08:00"
+  },
+  "review": {
+    "delayHours": 2,
+    "threshold": 4,
+    "gateEnabled": true,
+    "googleReviewUrl": "https://example.com/replace-with-google-review-link",
+    "privateFeedbackUrl": "https://example.com/replace-with-private-feedback-form",
+    "ownerAlertEmail": "owner@atelier-nova.example"
+  },
+  "messaging": {
+    "mode": "stub",
+    "liveEndpointEnv": "MESSAGING_TRANSPORT_URL",
+    "liveTokenEnv": "MESSAGING_TRANSPORT_TOKEN",
+    "senderName": "Atelier Nova"
+  },
+  "links": {
+    "booking": "https://example.com/replace-with-booking-link",
+    "demoAgent": "tel:+41445550124",
+    "consultation": "https://example.com/replace-with-consultation-link"
+  },
+  "website": {
+    "navigation": {
+      "featuresLabel": "Funktionen",
+      "impactLabel": "Wirkung",
+      "contactLabel": "Kontakt"
+    },
+    "hero": {
+      "eyebrow": "KI-Rezeption fuer moderne Salons",
+      "headline": "Kein Anruf soll wieder ins Leere gehen.",
+      "body": "Die digitale Rezeption beantwortet Fragen, erfasst Leads und bringt Buchungen direkt in den Kalender.",
+      "primaryCtaLabel": "Call Demo Agent",
+      "secondaryCtaLabel": "Book a Call",
+      "imageAlt": "Moderner Salon mit Spiegeln, Stylingplatz und gruenem Sessel"
+    },
+    "missedCalls": {
+      "headline": "Verpasste Anrufe kosten Termine.",
+      "body": "Wenn das Team gerade am Stuhl arbeitet, nimmt die digitale Rezeption den Anruf an und sichert die Anfrage fuer die Nachfassung.",
+      "missedCallsPerWeek": 7,
+      "weeksPerYear": 52,
+      "monthsPerYear": 12,
+      "weeklyLabel": "verpasste Anrufe pro Woche",
+      "monthlyLabel": "im durchschnittlichen Monat"
+    },
+    "featuresHeading": "Was die Rezeption fuer Ihr Team uebernimmt",
+    "features": [
+      {
+        "title": "Bucht Termine",
+        "description": "Prueft verfuegbare Zeiten und fuehrt Kundinnen zum passenden Termin oder Buchungslink."
+      },
+      {
+        "title": "Beantwortet FAQs",
+        "description": "Gibt freigegebene Antworten zu Leistungen, Preisen, Vorbereitung und Oeffnungszeiten."
+      },
+      {
+        "title": "Verbindet Anrufe",
+        "description": "Uebergibt sensible oder komplexe Anliegen an die richtige Person im Team."
+      },
+      {
+        "title": "Erfasst Leads",
+        "description": "Speichert Kontaktdaten, Interesse und Wunschzeit fuer die strukturierte Nachfassung."
+      },
+      {
+        "title": "24/7 erreichbar",
+        "description": "Nimmt auch ausserhalb der Oeffnungszeiten Anfragen an, ohne Ihrem Team Spaetschichten aufzubuerden."
+      }
+    ],
+    "finalCta": {
+      "headline": "Hoeren Sie selbst, wie Ihr naechster Anruf klingt.",
+      "body": "Rufen Sie den Demo Agent an oder buchen Sie ein Gespraech zur Einrichtung fuer Ihren Salon.",
+      "primaryCtaLabel": "Call Demo Agent",
+      "secondaryCtaLabel": "Book a Call"
+    }
+  },
+  "services": [
+    { "name": "Cut & Finish", "durationMinutes": 60, "priceChf": 118 },
+    { "name": "Balayage", "durationMinutes": 150, "priceChf": 248 },
+    { "name": "Gloss & Care", "durationMinutes": 75, "priceChf": 138 },
+    { "name": "Men's Cut", "durationMinutes": 45, "priceChf": 78 }
+  ]
+}
