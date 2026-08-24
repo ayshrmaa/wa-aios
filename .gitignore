@@ -19,3 +19,5 @@ proofshot-artifacts/
 
 # os
 .DS_Store
+.vercel
+.env*
