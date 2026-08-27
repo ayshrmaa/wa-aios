@@ -14,9 +14,42 @@ Verify it by sending an authenticated request to one of the `/webhook/*` endpoin
 
 ### Google Calendar
 
-The calendar adapter is local by default. To use Google Calendar, create an OAuth client in [Google Cloud Console](https://console.cloud.google.com/apis/credentials), enable Google Calendar API, authorize the calendar account with calendar read/write scopes, and provide a valid access token as `GOOGLE_CALENDAR_ACCESS_TOKEN`.
+Purpose: bookings land in the salon's real calendars (one per stylist). Without it the API
+uses an embedded calendar table that only exists on the machine running it.
 
-Set `CALENDAR_PROVIDER=google`. The current adapter accepts an access token, not refresh-token exchange credentials, so rotate the token before it expires. Verify by checking availability, creating a booking, then confirming the event in the configured staff calendar. If `CALENDAR_PROVIDER=google` has no token, startup fails clearly and does not fall back to the local adapter.
+Set `CALENDAR_PROVIDER=google` plus ONE credential mode. The API picks the mode from which
+variables are present and refuses to start if none are — it never falls back to local silently.
+
+**Mode A — OAuth refresh token (recommended for a salon's own Google account)**
+
+1. console.cloud.google.com → New project → APIs & Services → Enable *Google Calendar API*.
+2. APIs & Services → OAuth consent screen → External → add the salon owner's Google address as a test user.
+3. Credentials → Create credentials → OAuth client ID → *Web application* →
+   Authorised redirect URI: `http://localhost:8765/callback` → copy the client ID and secret.
+4. Put `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` in `.env`.
+5. Run `npm run google:consent` from the repo root. It prints a URL — open it **as the Google
+   account that owns the stylist calendars**, approve, and the script prints the
+   `GOOGLE_OAUTH_REFRESH_TOKEN` line to add to `.env`.
+6. In Google Calendar, create one calendar per stylist and put each calendar's ID
+   (Settings → Integrate calendar → Calendar ID) into `config/tenant.demo.json` under
+   `booking.staff[].calendarId`.
+
+Refresh tokens do not expire unless revoked. Access tokens are minted and cached automatically
+and refreshed a minute before expiry; a 401 from Google triggers exactly one refresh-and-retry.
+
+**Mode B — Service account (for a Google Workspace domain)**
+
+1. IAM & Admin → Service accounts → Create → Keys → Add key → JSON. Download it.
+2. `GOOGLE_SERVICE_ACCOUNT_JSON=/absolute/path/to/key.json` (or paste the JSON inline).
+3. Either share each stylist calendar with the service-account email (Make changes to events),
+   or enable domain-wide delegation and set `GOOGLE_IMPERSONATE_EMAIL=owner@salon.ch`.
+
+**Mode C — raw access token (development only)**
+
+`GOOGLE_CALENDAR_ACCESS_TOKEN=ya29...` from the OAuth Playground. Expires in about an hour.
+The API logs a warning at boot. Never use this in production.
+
+Verify: `npm run doctor` prints `PASS Google calendar auth (<mode>) — token minted`.
 
 ### Resend email
 
@@ -91,6 +124,13 @@ Completed appointments queue a rating prompt after `review_config.delayHours`. P
 
 | Variable | Required | Purpose | What breaks when missing or invalid |
 | --- | --- | --- | --- |
+| `CALENDAR_PROVIDER` | No | `local` (default) or `google`. | Local embedded calendar; bookings never reach Google. |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` | For Google mode A | Long-lived OAuth credentials for the calendar owner's account. | Startup fails with a message naming the missing variable. |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | For Google mode B | Path to, or inline contents of, the service-account key. | Startup fails. |
+| `GOOGLE_IMPERSONATE_EMAIL` | No | Workspace user to act as (domain-wide delegation). | Service account acts as itself; calendars must be shared with it. |
+| `GOOGLE_CALENDAR_ACCESS_TOKEN` | Dev only | Raw access token. Expires hourly. | — |
+| `API_BASE_URL` | For Retell scripts | Public URL Retell reaches the API on. | `retell:provision` / `retell:sync` / `doctor` refuse to run or point at localhost. |
+| `RETELL_LLM_ID` / `RETELL_AGENT_ID` | No | Override the ids in `retell/.retell-ids.json`. | The ids file is used. |
 | `DATABASE_URL` | No locally; yes for Postgres | PostgreSQL connection string. | Local PGlite is used when absent; production data is not used. |
 | `DATABASE_SSL` | No | TLS mode: `require` default, `disable`, `verify-ca`, or `verify-full`. | Wrong TLS settings prevent Postgres connection. |
 | `PGSSLMODE` | No | PostgreSQL-compatible TLS mode fallback. | Same as `DATABASE_SSL` when it is unset. |
@@ -151,3 +191,37 @@ npm run worker
 The API also runs the same cycle on `MESSAGE_DISPATCH_INTERVAL_MS`. `message_dispatch_state` is an API-owned operational table created automatically at runtime because the shared `messages` schema intentionally has no retry/lock columns. It records the claim token, attempts, retry time, and terminal reason.
 
 The claim makes sequential worker runs idempotent. If a process dies after claiming a message but before recording the provider response, the expired claim is marked `failed`, rather than replayed, to avoid an unprovable duplicate external send. Resend additionally receives a stable idempotency key. This is deliberate at-most-once behavior for ambiguous crashes; a human can inspect and requeue a terminal failure.
+
+## Install into a new business
+
+Ordered, from a clean clone to a live receptionist. Every step is a command in this repo;
+nothing is done by hand in a web console except creating accounts and copying keys.
+
+1. **Clone and install** — `npm run install:all` (Node 20+).
+2. **Describe the salon** — copy `config/tenant.demo.json` to `config/tenant.<slug>.json` and fill
+   in: name, address, `contact.transferPhone` (where complaints and "let me speak to a person" go),
+   `services[]` with real durations and CHF prices, `booking.staff[]` with one `calendarId` each,
+   `booking.hours`, `booking.closureDates`, `review.googleReviewUrl`. Set
+   `TENANT_CONFIG_PATH=config/tenant.<slug>.json` in `.env`. Duration matters most — it decides
+   how long each booking blocks.
+3. **Database** — create a Supabase project in an EU region, put its connection string in
+   `DATABASE_URL`, run `cd api && npm run migrate`. (Skip this to evaluate on the embedded database.)
+4. **Calendar** — follow *Google Calendar* above. `CALENDAR_PROVIDER=google`.
+5. **Messages** — follow *Resend email* above. WhatsApp waits for Meta verification.
+6. **Deploy the API** somewhere that does not sleep, with the `.env` values as environment
+   variables. Note its public URL as `API_BASE_URL`. Set a long random `RETELL_WEBHOOK_SECRET`.
+7. **Voice agent** — `RETELL_API_KEY` in `.env`, then `npm run retell:dry-run` to inspect the
+   payload and `npm run retell:provision` to create the agent. Re-run it after any change to the
+   prompt or tenant config; it updates in place. If only the API URL changed, `npm run retell:sync`.
+8. **Phone number** — in Retell, buy or import a number and assign the agent to it. Retell sells
+   US/CA numbers; for a Swiss +41 number use Twilio and SIP-trunk it into Retell.
+9. **Check everything** — `npm run doctor -- --build`. Every line must be PASS or an accepted WARN.
+10. **Dashboard and website** — deploy `dashboard/` and `website-template/` to Vercel from the
+    repo root with the root directory set to each folder. Website env: `RETELL_API_KEY`,
+    `RETELL_AGENT_ID` (the browser "talk to our receptionist" button mints web-call tokens
+    server-side; the key never reaches the browser).
+
+Local end-to-end without deploying: `npm run dev:up` boots the API, opens a temporary public
+tunnel, and re-points the agent at it. The tunnel URL changes every start; the script handles
+that so the agent never silently points at a dead URL.
+

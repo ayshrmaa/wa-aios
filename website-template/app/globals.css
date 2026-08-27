@@ -119,9 +119,10 @@ h1 { max-width: 650px; margin: 0; font-size: clamp(44px, 5.2vw, 76px); line-heig
 .feature { min-height: 220px; display: flex; flex-direction: column; padding: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .feature-1 { grid-row: span 2; background: var(--brand-primary); color: #f6faf8; }
 .feature-4 { background: color-mix(in srgb, var(--brand-accent) 38%, var(--panel)); }
-.feature-1 p { color: #bfd0ca; }
 .feature h3 { max-width: 260px; margin: auto 0 12px; font-size: clamp(24px, 2.5vw, 37px); line-height: 1; letter-spacing: -.04em; }
 .feature p { max-width: 340px; margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.feature-1 h3 { color: #f6faf8; }
+.feature-1 p { color: #cfe0d8; }
 
 .final-cta {
   width: min(1320px, calc(100% - 64px));

@@ -21,3 +21,7 @@ proofshot-artifacts/
 .DS_Store
 .vercel
 .env*
+
+# retell ids are per-account, never commit
+retell/.retell-ids.json
+.retell-ids.json

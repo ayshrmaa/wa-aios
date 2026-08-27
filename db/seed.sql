@@ -19,13 +19,13 @@ insert into tenants (
   'Europe/Zurich',
   'CHF',
   '{"logoText":"ATELIER NOVA","primary":"#173f35","accent":"#d8ff73","surface":"#f2f5f3","ink":"#10231e","fontDisplay":"Geist","fontBody":"Geist"}'::jsonb,
-  '{"phone":"+41 44 555 01 24","email":"hallo@atelier-nova.example","address":"Seefeldstrasse 88, 8008 Zuerich"}'::jsonb,
+  '{"phone":"+41 44 555 01 24","email":"hallo@atelier-nova.example","address":"Seefeldstrasse 88, 8008 Zuerich","transferPhone":"+41 44 555 01 24"}'::jsonb,
   128.00,
   0.1200,
   'native',
   '{"tier":"native","platform":"google_calendar","defaultDurationMinutes":60,"slotIntervalMinutes":30,"searchRangeDays":10,"swissHolidayRegion":"ZH","staff":[{"id":"lea","name":"Lea","aliases":["lea","leah"],"calendarId":"lea.atelier-nova@calendar.demo"},{"id":"mara","name":"Mara","aliases":["mara","martha"],"calendarId":"mara.atelier-nova@calendar.demo"},{"id":"noemi","name":"Noemi","aliases":["noemi","noemie"],"calendarId":"noemi.atelier-nova@calendar.demo"}],"hours":{"monday":[],"tuesday":[{"start":"09:00","end":"18:00"}],"wednesday":[{"start":"09:00","end":"18:00"}],"thursday":[{"start":"10:00","end":"20:00"}],"friday":[{"start":"09:00","end":"18:00"}],"saturday":[{"start":"08:30","end":"16:00"}],"sunday":[]},"closureDates":["2026-12-24","2026-12-31"],"additionalHolidayDates":[]}'::jsonb,
   '{"start":"21:00","end":"08:00"}'::jsonb,
-  '{"delayHours":2,"threshold":4,"gateEnabled":true,"googleReviewUrl":"https://example.com/replace-with-google-review-link","privateFeedbackUrl":"https://example.com/replace-with-private-feedback-form","ownerAlertEmail":"owner@atelier-nova.example"}'::jsonb,
+  '{"delayHours":2,"threshold":4,"gateEnabled":false,"googleReviewUrl":"https://example.com/replace-with-google-review-link","privateFeedbackUrl":"https://example.com/replace-with-private-feedback-form","ownerAlertEmail":"owner@atelier-nova.example"}'::jsonb,
   '{"mode":"stub","liveEndpointEnv":"MESSAGING_TRANSPORT_URL","liveTokenEnv":"MESSAGING_TRANSPORT_TOKEN","senderName":"Atelier Nova"}'::jsonb,
   '{"booking":"https://example.com/replace-with-booking-link","demoAgent":"tel:+41445550124","consultation":"https://example.com/replace-with-consultation-link"}'::jsonb,
   '[{"name":"Cut & Finish","durationMinutes":60,"priceChf":118},{"name":"Balayage","durationMinutes":150,"priceChf":248},{"name":"Gloss & Care","durationMinutes":75,"priceChf":138},{"name":"Men''s Cut","durationMinutes":45,"priceChf":78}]'::jsonb
@@ -70,12 +70,19 @@ with workdays as (
   from generate_series(current_date - 69, current_date + 14, interval '1 day') d
   where extract(isodow from d) between 2 and 6
 ), slots(slot_no, local_time) as (
-  values (1, time '09:00'), (2, time '10:30'), (3, time '13:00'), (4, time '14:30'), (5, time '16:00')
+  values (1, time '09:00'), (2, time '10:30'), (3, time '13:00'), (4, time '14:30'), (5, time '16:00'), (6, time '17:30')
+), phased_days as (
+  -- phase 0 = before AIOS, 1 = rollout, 2 = AIOS live. Drives volume, no-shows, recoveries, reviews.
+  select *, case when service_day < current_date - 42 then 0
+                 when service_day < current_date - 24 then 1
+                 else 2 end as phase
+  from workdays
 ), appointment_rows as (
   select
     row_number() over (order by w.service_day, s.slot_no) as appointment_no,
     w.service_day,
     w.day_no,
+    w.phase,
     s.slot_no,
     s.local_time,
     case (w.day_no + s.slot_no) % 4
@@ -91,8 +98,10 @@ with workdays as (
       when 1 then 'mara.atelier-nova@calendar.demo'
       else 'noemi.atelier-nova@calendar.demo'
     end as calendar_id
-  from workdays w
+  from phased_days w
   cross join slots s
+  where not (s.slot_no = 6 and (w.phase < 2 or w.day_no % 2 <> 0))
+    and not (s.slot_no = 5 and w.phase = 0 and w.day_no % 4 <> 0)
 ), prepared as (
   select appointment_rows.*,
     (service_day + local_time) at time zone 'Europe/Zurich'
@@ -125,10 +134,16 @@ select
   case
     when service_day > current_date then 'booked'
     when ((day_no * 5 + slot_no) % 19) = 0 then 'cancelled'
-    when ((day_no * 7 + slot_no * 3) % 13) = 0 then 'no_show'
+    when phase = 0 and ((day_no * 7 + slot_no * 3) % 8) = 0 then 'no_show'
+    when phase = 1 and ((day_no * 7 + slot_no * 3) % 11) = 0 then 'no_show'
+    when phase = 2 and ((day_no * 7 + slot_no * 3) % 19) = 0 then 'no_show'
     else 'completed'
   end,
-  case when ((day_no * 7 + slot_no * 3) % 13) = 0 then 'inferred' else 'platform' end,
+  case when ((day_no * 5 + slot_no) % 19) <> 0
+         and ((phase = 0 and ((day_no * 7 + slot_no * 3) % 8) = 0)
+           or (phase = 1 and ((day_no * 7 + slot_no * 3) % 11) = 0)
+           or (phase = 2 and ((day_no * 7 + slot_no * 3) % 19) = 0))
+       then 'inferred' else 'platform' end,
   (service_day + local_time) at time zone 'Europe/Zurich',
   (service_day + local_time) at time zone 'Europe/Zurich' +
     case when service = 'Balayage' then interval '150 minutes'
@@ -145,13 +160,15 @@ from rows;
 
 -- Each selected no-show gets a real follow-up appointment. The new row links back to the original.
 with candidates as (
-  select a.*, row_number() over (order by a.starts_at) as recovery_no
+  select a.*, row_number() over (order by a.starts_at) as recovery_no,
+         case when extract(isodow from (a.starts_at at time zone 'Europe/Zurich')::date + 3) between 2 and 6 then 3 else 5 end as recovery_offset
   from appointments a
   where a.tenant_id = '11111111-1111-4111-8111-111111111111'::uuid
     and a.status = 'no_show'
-    and a.starts_at < now() - interval '8 days'
-    and extract(isodow from (a.starts_at at time zone 'Europe/Zurich')::date + 7) between 2 and 6
-    and mod(extract(day from a.starts_at)::int, 2) = 0
+    and a.starts_at < now() - interval '4 days'
+    and case when a.starts_at < current_date - 42 then mod(extract(day from a.starts_at)::int, 9) = 0
+             when a.starts_at < current_date - 24 then mod(extract(day from a.starts_at)::int, 4) = 0
+             else mod(extract(day from a.starts_at)::int, 2) = 0 end
 )
 insert into appointments (
   id, tenant_id, contact_id, external_id, platform, status, status_source,
@@ -166,8 +183,8 @@ select
   'google_calendar',
   'completed',
   'platform',
-  (((starts_at at time zone 'Europe/Zurich')::date + 7) + time '18:30') at time zone 'Europe/Zurich',
-  (((starts_at at time zone 'Europe/Zurich')::date + 7) + time '19:30') at time zone 'Europe/Zurich',
+  (((starts_at at time zone 'Europe/Zurich')::date + recovery_offset) + time '17:30') at time zone 'Europe/Zurich',
+  (((starts_at at time zone 'Europe/Zurich')::date + recovery_offset) + time '18:30') at time zone 'Europe/Zurich',
   service,
   value_chf,
   staff,
@@ -184,7 +201,13 @@ with contact_pool as (
   select d::date as call_day, seq,
          row_number() over (order by d, seq) as call_no
   from generate_series(current_date - 69, current_date, interval '1 day') d
-  cross join lateral generate_series(1, case when extract(isodow from d) in (6,7) then 2 else 4 end) seq
+  cross join lateral generate_series(1, case when extract(isodow from d) in (6,7) then 2
+                                            when d < current_date - 42 then 4 else 5 end) seq
+), call_flags as (
+  select *, case when call_day < current_date - 42 then call_no % 4 = 0
+                 when call_day < current_date - 24 then call_no % 10 = 0
+                 else call_no % 40 = 0 end as missed
+  from call_rows
 )
 insert into calls (
   tenant_id, contact_id, retell_call_id, started_at, duration_seconds, answered,
@@ -195,44 +218,56 @@ select
   c.id,
   'retell-demo-' || lpad(call_no::text, 5, '0'),
   call_day::timestamptz + interval '8 hours' + (seq * interval '137 minutes'),
-  case when (call_no % 9) = 0 then 0 else 72 + ((call_no * 23) % 310) end,
-  (call_no % 9) <> 0,
-  case when (call_no % 9) = 0 then 'missed'
+  case when r.missed then 0 else 72 + ((call_no * 23) % 310) end,
+  not r.missed,
+  case when r.missed then 'missed'
        when (call_no % 4) = 0 then 'booked'
        when (call_no % 7) = 0 then 'transferred'
        else 'inquiry' end,
-  case when (call_no % 9) = 0 then null else '[Demo transcript omitted]' end,
+  case when r.missed then null else '[Demo transcript omitted]' end,
   null,
-  (call_no % 9) <> 0
-from call_rows r
+  not r.missed
+from call_flags r
 join contact_pool c on c.n = (((r.call_no * 11) - 1) % c.total) + 1;
 
+with rr as (
+  select a.*, row_number() over (order by a.starts_at) as rn,
+         case when a.starts_at < current_date - 42 then 0
+              when a.starts_at < current_date - 24 then 1 else 2 end as phase
+  from appointments a
+  where a.tenant_id = '11111111-1111-4111-8111-111111111111'::uuid
+    and a.status = 'completed'
+    and a.starts_at < now()
+    and case when a.starts_at < current_date - 42
+               then mod(extract(day from a.starts_at)::int + extract(hour from a.starts_at)::int, 5) = 0
+             when a.starts_at < current_date - 24
+               then mod(extract(day from a.starts_at)::int + extract(hour from a.starts_at)::int, 2) = 0
+             else mod(extract(day from a.starts_at)::int + extract(hour from a.starts_at)::int, 4) <> 0 end
+), scored as (
+  select rr.*,
+    case when phase = 0 and rn % 4 = 0 then null
+         when phase >= 1 and rn % 5 = 0 then null
+         when phase = 0 and rn % 7 = 0 then 3
+         when phase = 0 then 4 + case when rn % 3 = 0 then 1 else 0 end
+         when phase = 1 and rn % 11 = 0 then 3
+         when phase = 1 then 4 + case when rn % 2 = 0 then 1 else 0 end
+         when rn % 17 = 0 then 3
+         else 5 - case when rn % 3 = 0 then 1 else 0 end end as rating
+  from rr
+)
 insert into reviews (
   tenant_id, contact_id, appointment_id, requested_at, rating, routed_to,
   received_at, gbp_review_id, private_feedback
 )
 select
-  a.tenant_id,
-  a.contact_id,
-  a.id,
-  a.ends_at + interval '2 hours',
-  case when row_number() over (order by a.starts_at) % 5 = 0 then null
-       when row_number() over (order by a.starts_at) % 11 = 0 then 3
-       else 4 + (row_number() over (order by a.starts_at) % 2) end,
-  case when row_number() over (order by a.starts_at) % 5 = 0 then null
-       when row_number() over (order by a.starts_at) % 11 = 0 then 'private'
-       else 'google' end,
-  case when row_number() over (order by a.starts_at) % 5 = 0 then null
-       else a.ends_at + interval '1 day' + ((row_number() over (order by a.starts_at) % 9) * interval '3 hours') end,
-  case when row_number() over (order by a.starts_at) % 5 <> 0
-         and row_number() over (order by a.starts_at) % 11 <> 0
-       then 'gbp-demo-' || lpad((row_number() over (order by a.starts_at))::text, 5, '0') end,
-  case when row_number() over (order by a.starts_at) % 11 = 0 then 'Mehr Zeit fuer die Beratung gewuenscht.' end
-from appointments a
-where a.tenant_id = '11111111-1111-4111-8111-111111111111'::uuid
-  and a.status = 'completed'
-  and a.starts_at < now()
-  and mod(extract(day from a.starts_at)::int + extract(hour from a.starts_at)::int, 3) = 0;
+  tenant_id, contact_id, id,
+  ends_at + interval '2 hours',
+  rating,
+  case when rating is null then null when rating < 4 then 'private' else 'google' end,
+  case when rating is null then null else ends_at + interval '1 day' + ((rn % 9) * interval '3 hours') end,
+  case when rating >= 4 then 'gbp-demo-' || lpad(rn::text, 5, '0') end,
+  case when rating < 4 then 'Mehr Zeit fuer die Beratung gewuenscht.' end
+from scored;
 
 insert into complaints (
   tenant_id, contact_id, source_channel, detected_category, severity, body, notified_at, resolved_at, created_at

@@ -10,7 +10,8 @@
   "contact": {
     "phone": "+41 44 555 01 24",
     "email": "hallo@atelier-nova.example",
-    "address": "Seefeldstrasse 88, 8008 Zuerich"
+    "address": "Seefeldstrasse 88, 8008 Zuerich",
+    "transferPhone": "+41 44 555 01 24"
   },
   "branding": {
     "logoText": "ATELIER NOVA",
@@ -34,32 +35,69 @@
       {
         "id": "lea",
         "name": "Lea",
-        "aliases": ["lea", "leah"],
+        "aliases": [
+          "lea",
+          "leah"
+        ],
         "calendarId": "lea.atelier-nova@calendar.demo"
       },
       {
         "id": "mara",
         "name": "Mara",
-        "aliases": ["mara", "martha"],
+        "aliases": [
+          "mara",
+          "martha"
+        ],
         "calendarId": "mara.atelier-nova@calendar.demo"
       },
       {
         "id": "noemi",
         "name": "Noemi",
-        "aliases": ["noemi", "noemie"],
+        "aliases": [
+          "noemi",
+          "noemie"
+        ],
         "calendarId": "noemi.atelier-nova@calendar.demo"
       }
     ],
     "hours": {
       "monday": [],
-      "tuesday": [{ "start": "09:00", "end": "18:00" }],
-      "wednesday": [{ "start": "09:00", "end": "18:00" }],
-      "thursday": [{ "start": "10:00", "end": "20:00" }],
-      "friday": [{ "start": "09:00", "end": "18:00" }],
-      "saturday": [{ "start": "08:30", "end": "16:00" }],
+      "tuesday": [
+        {
+          "start": "09:00",
+          "end": "18:00"
+        }
+      ],
+      "wednesday": [
+        {
+          "start": "09:00",
+          "end": "18:00"
+        }
+      ],
+      "thursday": [
+        {
+          "start": "10:00",
+          "end": "20:00"
+        }
+      ],
+      "friday": [
+        {
+          "start": "09:00",
+          "end": "18:00"
+        }
+      ],
+      "saturday": [
+        {
+          "start": "08:30",
+          "end": "16:00"
+        }
+      ],
       "sunday": []
     },
-    "closureDates": ["2026-12-24", "2026-12-31"],
+    "closureDates": [
+      "2026-12-24",
+      "2026-12-31"
+    ],
     "additionalHolidayDates": []
   },
   "quietHours": {
@@ -69,7 +107,7 @@
   "review": {
     "delayHours": 2,
     "threshold": 4,
-    "gateEnabled": true,
+    "gateEnabled": false,
     "googleReviewUrl": "https://example.com/replace-with-google-review-link",
     "privateFeedbackUrl": "https://example.com/replace-with-private-feedback-form",
     "ownerAlertEmail": "owner@atelier-nova.example"
@@ -139,9 +177,25 @@
     }
   },
   "services": [
-    { "name": "Cut & Finish", "durationMinutes": 60, "priceChf": 118 },
-    { "name": "Balayage", "durationMinutes": 150, "priceChf": 248 },
-    { "name": "Gloss & Care", "durationMinutes": 75, "priceChf": 138 },
-    { "name": "Men's Cut", "durationMinutes": 45, "priceChf": 78 }
+    {
+      "name": "Cut & Finish",
+      "durationMinutes": 60,
+      "priceChf": 118
+    },
+    {
+      "name": "Balayage",
+      "durationMinutes": 150,
+      "priceChf": 248
+    },
+    {
+      "name": "Gloss & Care",
+      "durationMinutes": 75,
+      "priceChf": 138
+    },
+    {
+      "name": "Men's Cut",
+      "durationMinutes": 45,
+      "priceChf": 78
+    }
   ]
 }

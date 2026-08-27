@@ -47,7 +47,8 @@ scheduling, and message dispatch. If these pass, the core works.
 | `manychat/` | Instagram/WhatsApp DM runbook | Written, blocked on Meta |
 | `config/tenant.demo.json` | Every salon-specific value. One file per client. | — |
 
-**Read [`api/CONFIGURATION.md`](api/CONFIGURATION.md) before connecting anything.** It lists
+**Installing this into a real salon: follow "Install into a new business" in
+[`api/CONFIGURATION.md`](api/CONFIGURATION.md).** Ten ordered steps, every one a command in this repo. It lists
 every external service, where the credential comes from, which environment variable it
 goes in, and what breaks when it's missing.
 
@@ -117,8 +118,15 @@ None of these are code problems. Nothing in this repo unblocks them.
 
 ---
 
-## Known bugs
+## Operator commands (repo root)
 
-- The "Bucht Termine" card on the website renders dark text on a dark green background.
-- The dashboard's demo figures are flat (+0% bookings, CHF 128 recovered). Accurate for the
-  seed data, unconvincing for a sales demo. Retune the seed before showing a prospect.
+| Command | What it does |
+|---|---|
+| `npm run install:all` | installs every package |
+| `npm run doctor` | checks API, auth, Retell agent + tool reachability, calendar, transport. `-- --build` adds the Next.js builds |
+| `npm run dev:up` | local end-to-end: API + public tunnel + re-points the agent |
+| `npm run retell:provision` | creates or updates the voice agent from `retell/` + tenant config |
+| `npm run retell:sync` | re-points the agent's tool URLs after the API moves |
+| `npm run google:consent` | one-time Google Calendar authorisation → refresh token |
+| `npm run seed:regenerate` | rebuilds demo data and the dashboard snapshot, runs consistency assertions |
+| `npm test` | 22 tests against a live API server and real database |

@@ -1,0 +1,17 @@
+{
+  "name": "wa-aios",
+  "private": true,
+  "type": "module",
+  "description": "AI receptionist and follow-up system for Swiss salons",
+  "scripts": {
+    "install:all": "for d in api db dashboard website-template audit-generator workflows; do (cd $d && npm ci --silent) || exit 1; done",
+    "doctor": "node scripts/doctor.mjs",
+    "dev:up": "node scripts/dev-up.mjs",
+    "retell:provision": "node retell/provision.mjs",
+    "retell:sync": "node retell/provision.mjs --sync-tools",
+    "retell:dry-run": "node retell/provision.mjs --dry-run",
+    "google:consent": "node scripts/google-oauth-consent.mjs",
+    "seed:regenerate": "cd db && npm run seed:generate && npm run export:dashboard && npm run validate",
+    "test": "cd api && npm test"
+  }
+}
