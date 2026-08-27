@@ -156,9 +156,13 @@ test("dashboard API: token required, leads funnel and overview live counts are r
   const leads = await dashboard("leads");
   assert.equal(leads.status, 200);
   const funnel = Object.fromEntries(leads.json.funnel.map((f) => [f.status, f.count]));
+  // The seed ships demo leads too, so assert on what this file created, not on absolute counts.
   assert.ok(funnel.booked >= 2, `booked leads present: ${JSON.stringify(funnel)}`);
   assert.ok(funnel.contacted >= 2);
-  assert.equal(funnel.lost, 1);
+  assert.ok(funnel.lost >= 1);
+  const mine = (await q(`select status from leads where contact_id in (select id from contacts where phone_e164 in ('+41795551234','+41795550001','+41795550002') or email = 'mia@example.ch' or manychat_subscriber_id = '1234567890')`)).rows.map((r) => r.status).sort();
+  // Nadia contacted, Tom booked, Eva booked, Lara contacted twice (two enquiries, one ladder), Mia lost.
+  assert.deepEqual(mine, ["booked", "booked", "contacted", "contacted", "contacted", "lost"], `statuses of leads created by this file: ${mine}`);
   const overview = await dashboard("overview");
   assert.equal(overview.status, 200);
   assert.ok(overview.json.live.upcoming_appointments >= 2);
