@@ -88,6 +88,26 @@ For production, provision PostgreSQL (for example a Supabase project) and copy i
 
 Use PGlite only for local development and tests. Verify Postgres by running `npm run migrate`, then starting the API. Startup logs `database_driver_active` with `driver: "postgres"`; if the schema or booking constraints are absent, startup fails rather than weakens collision protection.
 
+### Leads (Service 4.1)
+
+No credentials. Three webhooks, all behind `x-retell-webhook-secret`:
+
+- `POST /webhook/lead` — website form, Google, manual. Body: `source`, `name`, `phone`, `email`,
+  `serviceInterest`, `urgency` (`now` | `this_week` | `flexible`), `preferredTime`, `notes`.
+- `POST /webhook/manychat-lead` — ManyChat External Request. See `manychat/RUNBOOK.md`.
+- `POST /webhook/lead-status` — `leadId`, `status` (`new` | `contacted` | `qualified` | `booked` | `lost`).
+
+A lead gets five follow-ups (2 min, day 1, day 3, day 7, day 14) on the channel it arrived on,
+falling back to email then WhatsApp. Any booking with the same phone number exits the ladder.
+
+### Owner dashboard
+
+The dashboard never touches the database. It reads `/api/dashboard/*` on the API with
+`DASHBOARD_API_TOKEN`, and writes lead status through the same webhooks as the receptionist.
+Dashboard env: `AIOS_API_URL`, `DASHBOARD_API_TOKEN`, `RETELL_WEBHOOK_SECRET`, `DASHBOARD_PASSWORD`.
+Without `AIOS_API_URL` it renders the bundled demo snapshot; without `DASHBOARD_PASSWORD` it has
+no login — acceptable for the demo, never for a salon.
+
 ## Tenant messaging configuration
 
 Provider choice is separated from booking logic. The dispatcher reads `tenants.messaging_config` for per-channel providers and optional localized copy. Environment variables may also select a provider with `MESSAGE_TRANSPORT_EMAIL`, `MESSAGE_TRANSPORT_WHATSAPP`, `MESSAGE_TRANSPORT_SMS`, or `MESSAGE_TRANSPORT_INSTAGRAM`; tenant configuration takes precedence.
@@ -131,6 +151,9 @@ Completed appointments queue a rating prompt after `review_config.delayHours`. P
 | `GOOGLE_CALENDAR_ACCESS_TOKEN` | Dev only | Raw access token. Expires hourly. | — |
 | `API_BASE_URL` | For Retell scripts | Public URL Retell reaches the API on. | `retell:provision` / `retell:sync` / `doctor` refuse to run or point at localhost. |
 | `RETELL_LLM_ID` / `RETELL_AGENT_ID` | No | Override the ids in `retell/.retell-ids.json`. | The ids file is used. |
+| `DASHBOARD_API_TOKEN` | For the dashboard | Bearer token the owner dashboard uses to read `/api/dashboard/*`. Generate with `openssl rand -hex 24`. | Dashboard shows demo data only; `/api/dashboard/*` returns 503. |
+| `MANYCHAT_API_KEY` | For Instagram DMs | ManyChat → Settings → API. Sends lead follow-ups as DMs. | Instagram leads are captured; their follow-ups stay `stubbed`. |
+| `MESSAGE_TRANSPORT_INSTAGRAM` | With ManyChat | Set to `manychat`. | Instagram channel uses the null transport. |
 | `DATABASE_URL` | No locally; yes for Postgres | PostgreSQL connection string. | Local PGlite is used when absent; production data is not used. |
 | `DATABASE_SSL` | No | TLS mode: `require` default, `disable`, `verify-ca`, or `verify-full`. | Wrong TLS settings prevent Postgres connection. |
 | `PGSSLMODE` | No | PostgreSQL-compatible TLS mode fallback. | Same as `DATABASE_SSL` when it is unset. |

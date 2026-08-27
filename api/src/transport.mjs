@@ -26,8 +26,9 @@ function providerForChannel(channel, tenant, env) {
   if (["", "null", "stub", "none"].includes(selected)) return "null";
   if (selected === "resend") return "resend";
   if (["whatsapp_cloud", "whatsappcloud", "meta_whatsapp"].includes(selected)) return "whatsapp_cloud";
+  if (selected === "manychat") return "manychat";
   throw new TransportConfigurationError(
-    `Unknown message transport ${selected || "(empty)"} for ${channel}. Expected null, resend, or whatsapp_cloud.`
+    `Unknown message transport ${selected || "(empty)"} for ${channel}. Expected null, resend, whatsapp_cloud, or manychat.`
   );
 }
 
@@ -190,6 +191,12 @@ export class ChannelTransport {
         fetchImpl: this.fetchImpl
       });
     }
+    if (provider === "manychat") {
+      if (!["instagram", "whatsapp"].includes(message.channel)) {
+        throw new TransportConfigurationError("ManyChat can only be selected for the instagram or whatsapp channel.");
+      }
+      return new ManyChatTransport({ apiKey: this.env.MANYCHAT_API_KEY, fetchImpl: this.fetchImpl });
+    }
     throw new TransportConfigurationError(`No transport is available for ${message.channel}.`);
   }
 
@@ -200,4 +207,44 @@ export class ChannelTransport {
 
 export function createTransport(options = {}) {
   return new ChannelTransport(options);
+}
+
+/**
+ * ManyChat — Instagram DM (and WhatsApp via ManyChat) delivery. Recipient is the ManyChat
+ * subscriber id stored on the contact. Requires MANYCHAT_API_KEY. Inert (throws) without it —
+ * never silently falls back to NullTransport.
+ * API: POST https://api.manychat.com/fb/sending/sendContent  (Bearer key)
+ */
+export class ManyChatTransport {
+  constructor({ apiKey, fetchImpl = fetch, apiBase = "https://api.manychat.com" } = {}) {
+    if (!apiKey) {
+      throw new TransportConfigurationError(
+        "ManyChat transport selected but MANYCHAT_API_KEY is unset. Set it (ManyChat → Settings → API) or choose another provider."
+      );
+    }
+    this.provider = "manychat";
+    this.apiKey = apiKey;
+    this.fetchImpl = fetchImpl;
+    this.apiBase = apiBase.replace(/\/$/, "");
+  }
+
+  async send({ recipient, rendered, message }) {
+    if (!recipient) throw new Error("ManyChat send requires the contact's manychat_subscriber_id.");
+    const response = await this.fetchImpl(`${this.apiBase}/fb/sending/sendContent`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        subscriber_id: recipient,
+        data: { version: "v2", content: { messages: [{ type: "text", text: rendered.body }] } },
+        // Outside Meta's 24h window a tag is mandatory; appointment/lead updates qualify.
+        message_tag: "ACCOUNT_UPDATE"
+      })
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(`ManyChat ${response.status}: ${text.slice(0, 300)}`);
+    let json = {};
+    try { json = JSON.parse(text); } catch {}
+    if (json.status && json.status !== "success") throw new Error(`ManyChat rejected the send: ${text.slice(0, 300)}`);
+    return { status: "sent", provider: "manychat", providerMessageId: json.message_id ?? null, channel: message.channel };
+  }
 }

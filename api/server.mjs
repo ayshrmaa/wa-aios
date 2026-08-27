@@ -7,6 +7,8 @@ import { createCalendar } from "./src/calendar.mjs";
 import { BookingService, tenantIdFromRequest } from "./src/booking-service.mjs";
 import { MessageDispatcher } from "./src/dispatcher.mjs";
 import { createTransport } from "./src/transport.mjs";
+import { LeadService } from "./src/leads.mjs";
+import { DashboardApi, DASHBOARD_ROUTES } from "./src/dashboard-api.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -19,7 +21,11 @@ const routes = new Map([
   ["/webhook/log-call", "logCall"],
   ["/webhook/log-complaint", "logComplaint"],
   ["/webhook/log-review-rating", "recordReviewRating"],
-  ["/webhook/log-callback", "logCallback"]
+  ["/webhook/log-callback", "logCallback"],
+  // Service 4.1 — leads from the website form, ManyChat, the receptionist, or manual entry
+  ["/webhook/lead", ["leads", "createLead"]],
+  ["/webhook/manychat-lead", ["leads", "manychatLead"]],
+  ["/webhook/lead-status", ["leads", "updateLeadStatus"]]
 ]);
 
 function writeLog(logger, level, event, details = {}) {
@@ -133,6 +139,13 @@ export async function createRuntime(options = {}) {
     env
   });
   const service = new BookingService({ db: opened.db, calendar, env, logger });
+  const leads = new LeadService({ db: opened.db, tenantLoader: (id) => service.tenant(id), logger });
+  const dashboardApi = new DashboardApi({ db: opened.db });
+  const services = { booking: service, leads };
+  const dashboardToken = String(env.DASHBOARD_API_TOKEN ?? "");
+  if (!dashboardToken) {
+    writeLog(logger, "warn", "dashboard_api_disabled", { message: "DASHBOARD_API_TOKEN is unset. /api/dashboard/* returns 503 until it is configured." });
+  }
   const transport = options.transport ?? createTransport({ env, logger, fetchImpl: options.fetchImpl ?? fetch });
   const dispatcher = new MessageDispatcher({
     db: opened.db,
@@ -267,6 +280,19 @@ export async function createRuntime(options = {}) {
         });
       }
 
+      if (request.method === "GET" && DASHBOARD_ROUTES.has(url.pathname)) {
+        if (!dashboardToken) {
+          return sendJson(response, 503, { error: "dashboard_api_disabled", message: "DASHBOARD_API_TOKEN is not configured on the API.", requestId });
+        }
+        const supplied = String(request.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+        if (!secretsMatch(dashboardToken, supplied)) {
+          writeLog(logger, "warn", "dashboard_auth_failed", { requestId, path: url.pathname, ip });
+          return sendJson(response, 401, { error: "unauthorized", message: "Dashboard token is missing or wrong.", requestId });
+        }
+        const tenantId = tenantIdFromRequest({}, url, env);
+        return sendJson(response, 200, await dashboardApi[DASHBOARD_ROUTES.get(url.pathname)](tenantId, url));
+      }
+
       const method = routes.get(url.pathname);
       if (request.method !== "POST" || !method) {
         return sendJson(response, 404, {
@@ -278,7 +304,8 @@ export async function createRuntime(options = {}) {
 
       const body = await readJson(request);
       const tenantId = tenantIdFromRequest(body, url, env);
-      const result = await service[method](tenantId, body);
+      const [target, handler] = Array.isArray(method) ? [services[method[0]], method[1]] : [service, method];
+      const result = await target[handler](tenantId, body);
       return sendJson(response, 200, result);
     } catch (error) {
       writeLog(logger, "error", "http_request_failed", {
@@ -310,6 +337,7 @@ export async function createRuntime(options = {}) {
     calendar,
     dispatcher,
     service,
+    leads,
     server,
     seeded: opened.seeded,
     dataDir,

@@ -11,6 +11,7 @@ import {
 } from "./time.mjs";
 import { DEFAULT_TENANT_ID, jsonValue } from "./database.mjs";
 import { renderMessageTemplate } from "./messaging-templates.mjs";
+import { markLeadBooked } from "./leads.mjs";
 
 const isoWithZone = /(?:Z|[+-]\d{2}:\d{2})$/i;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -533,6 +534,7 @@ export class BookingService {
           values ($1::uuid, 'appointment', $2::uuid, 'appointment.created', 'api.booking', $3::jsonb)
         `, [tenant.id, appointment.id, JSON.stringify({ externalId: createdEvent.id, staff: staff.name })]);
         await scheduleReminders(tx, tenant, { ...appointment, contact_first_name: firstName(body.customerName) });
+        await markLeadBooked(tx, tenant.id, appointment.contact_id, appointment.id);
         await tx.query("delete from booking_slot_locks where id = $1::uuid", [lock.lock_id]);
         return { appointment };
       });

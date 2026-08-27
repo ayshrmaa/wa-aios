@@ -48,6 +48,31 @@ const defaultTemplates = {
       body: "Guten Tag {{firstName}}, danke für Ihren Besuch bei {{salonName}}. Ihre Rückmeldung zu {{service}} hilft uns sehr: {{reviewUrl}}",
       whatsapp: { name: "review_request", bodyParameters: ["firstName", "service", "reviewUrl"] }
     },
+    lead_followup_instant: {
+      subject: "Ihre Anfrage bei {{salonName}}",
+      body: "Guten Tag {{firstName}}, danke für Ihre Anfrage{{serviceInterestPhrase}}. Wir haben gerade freie Termine — antworten Sie mit Ihrem Wunschtag oder buchen Sie direkt: {{bookingUrl}}",
+      whatsapp: { name: "lead_followup_instant", bodyParameters: ["firstName", "serviceInterestPhrase", "bookingUrl"] }
+    },
+    lead_followup_day_1: {
+      subject: "Noch Interesse an einem Termin?",
+      body: "Guten Tag {{firstName}}, gestern haben Sie sich bei {{salonName}} gemeldet{{serviceInterestPhrase}}. Sollen wir Ihnen zwei, drei passende Zeiten vorschlagen? Einfach kurz antworten.",
+      whatsapp: { name: "lead_followup_day_1", bodyParameters: ["firstName", "serviceInterestPhrase"] }
+    },
+    lead_followup_day_3: {
+      subject: "Ihr Termin bei {{salonName}}",
+      body: "Guten Tag {{firstName}}, diese Woche haben wir noch freie Plätze{{serviceInterestPhrase}}. Wenn Sie möchten, reservieren wir Ihnen gern einen: {{bookingUrl}}",
+      whatsapp: { name: "lead_followup_day_3", bodyParameters: ["firstName", "serviceInterestPhrase", "bookingUrl"] }
+    },
+    lead_reengage_day_7: {
+      subject: "Wir sind da, wenn es passt",
+      body: "Guten Tag {{firstName}}, kein Stress — wenn der Zeitpunkt für Ihren Termin bei {{salonName}} passt, sind wir für Sie da. Antworten Sie einfach auf diese Nachricht.",
+      whatsapp: { name: "lead_reengage_day_7", bodyParameters: ["firstName"] }
+    },
+    lead_reengage_day_14: {
+      subject: "Letzte Nachricht von {{salonName}}",
+      body: "Guten Tag {{firstName}}, das ist unsere letzte Nachricht zu Ihrer Anfrage. Falls Sie später einen Termin wünschen, erreichen Sie uns jederzeit unter {{salonPhone}}. Alles Gute!",
+      whatsapp: { name: "lead_reengage_day_14", bodyParameters: ["firstName", "salonPhone"] }
+    },
     complaint_owner_alert: {
       subject: "Neue Kundenbeschwerde: {{severity}}",
       body: "Neue Kundenbeschwerde von {{firstName}}. Einstufung: {{severity}}. Anliegen: {{complaintBody}}. Bitte persönlich prüfen und nachfassen.",
@@ -100,6 +125,31 @@ const defaultTemplates = {
       body: "Hello {{firstName}}, thank you for visiting {{salonName}}. Your feedback about {{service}} helps us greatly: {{reviewUrl}}",
       whatsapp: { name: "review_request", bodyParameters: ["firstName", "service", "reviewUrl"] }
     },
+    lead_followup_instant: {
+      subject: "Your enquiry at {{salonName}}",
+      body: "Hello {{firstName}}, thanks for getting in touch{{serviceInterestPhrase}}. We have openings right now — reply with a day that suits you, or book directly: {{bookingUrl}}",
+      whatsapp: { name: "lead_followup_instant", bodyParameters: ["firstName", "serviceInterestPhrase", "bookingUrl"] }
+    },
+    lead_followup_day_1: {
+      subject: "Still keen on an appointment?",
+      body: "Hello {{firstName}}, you contacted {{salonName}} yesterday{{serviceInterestPhrase}}. Shall we suggest two or three times that work? Just reply.",
+      whatsapp: { name: "lead_followup_day_1", bodyParameters: ["firstName", "serviceInterestPhrase"] }
+    },
+    lead_followup_day_3: {
+      subject: "Your appointment at {{salonName}}",
+      body: "Hello {{firstName}}, we still have space this week{{serviceInterestPhrase}}. Happy to hold one for you: {{bookingUrl}}",
+      whatsapp: { name: "lead_followup_day_3", bodyParameters: ["firstName", "serviceInterestPhrase", "bookingUrl"] }
+    },
+    lead_reengage_day_7: {
+      subject: "Here when it suits",
+      body: "Hello {{firstName}}, no pressure — whenever the timing is right for your appointment at {{salonName}}, we're here. Just reply to this message.",
+      whatsapp: { name: "lead_reengage_day_7", bodyParameters: ["firstName"] }
+    },
+    lead_reengage_day_14: {
+      subject: "Last note from {{salonName}}",
+      body: "Hello {{firstName}}, this is our last message about your enquiry. If you'd like an appointment later on, you can always reach us on {{salonPhone}}. All the best!",
+      whatsapp: { name: "lead_reengage_day_14", bodyParameters: ["firstName", "salonPhone"] }
+    },
     complaint_owner_alert: {
       subject: "New customer complaint: {{severity}}",
       body: "New customer complaint from {{firstName}}. Severity: {{severity}}. Concern: {{complaintBody}}. Please review and follow up personally.",
@@ -123,7 +173,7 @@ function templateForLocale(templates, locale, fallbackLocale, templateId) {
     ?? null;
 }
 
-export function renderMessageTemplate({ tenant, templateId, contact = {}, appointment = {}, complaint = {} }) {
+export function renderMessageTemplate({ tenant, templateId, contact = {}, appointment = {}, complaint = {}, lead = {} }) {
   const locale = tenant.locale || "de-CH";
   const fallbackLocale = tenant.fallback_locale || "en";
   const custom = templateForLocale(customTemplates(tenant), locale, fallbackLocale, templateId);
@@ -147,7 +197,12 @@ export function renderMessageTemplate({ tenant, templateId, contact = {}, appoin
     severity: complaint.severity || "medium",
     complaintBody: complaint.body || "No details supplied.",
     ratingUrl: review.privateFeedbackUrl || review.private_feedback_url || "",
-    reviewUrl: review.googleReviewUrl || review.google_review_url || review.privateFeedbackUrl || ""
+    reviewUrl: review.googleReviewUrl || review.google_review_url || review.privateFeedbackUrl || "",
+    bookingUrl: tenant.links?.booking || tenant.links?.bookingUrl || tenant.contact_config?.phone || "",
+    salonPhone: tenant.contact_config?.phone || "",
+    serviceInterestPhrase: (lead.serviceInterest || appointment.service)
+      ? (String(locale).startsWith("de") ? ` zu ${lead.serviceInterest || appointment.service}` : ` about ${lead.serviceInterest || appointment.service}`)
+      : ""
   };
   return {
     locale: custom ? locale : (fallbackLocale || "en"),

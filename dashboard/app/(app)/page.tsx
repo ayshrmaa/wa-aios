@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
-import { getDashboardData } from "../lib/data";
-import { calculateMetrics } from "../lib/metrics";
-import type { SourceKey } from "../lib/types";
+import { getOverview } from "../../lib/api";
+import { fmt } from "../../lib/ui";
+import { calculateMetrics } from "../../lib/metrics";
+import type { SourceKey } from "../../lib/types";
 
 const sourceLabels: Record<SourceKey, string> = {
   call: "Anrufe",
@@ -48,7 +49,7 @@ function TrendLine({ points }: { points: { label: string; value: number | null }
 }
 
 export default async function DashboardPage() {
-  const data = await getDashboardData();
+  const data = await getOverview();
   const metrics = calculateMetrics(data.kpis);
   const brand = data.tenant.branding || {};
   const style = {
@@ -63,14 +64,6 @@ export default async function DashboardPage() {
 
   return (
     <main className="dashboard-shell" style={style}>
-      <header className="topbar">
-        <div className="wordmark"><span className="wordmark-mark">N</span>{brand.logoText || data.tenant.name}</div>
-        <div className="topbar-meta">
-          {data.source === "seed-snapshot" && <span className="demo-badge">Seed-Demo</span>}
-          <span>{metrics.periodLabel}</span>
-          <span className="avatar" aria-label="Saloninhaber Profil">AN</span>
-        </div>
-      </header>
 
       <section className="intro">
         <div>
@@ -84,6 +77,14 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      <section className="live-strip" aria-label="Jetzt">
+        <article><span>Termine heute</span><strong>{fmt.int(data.live.today_appointments)}</strong></article>
+        <article><span>Bevorstehend</span><strong>{fmt.int(data.live.upcoming_appointments)}</strong></article>
+        <article><span>Offene Leads</span><strong>{fmt.int(data.live.open_leads)}</strong></article>
+        <article className={data.live.open_complaints ? "alert" : undefined}><span>Offene Beschwerden</span><strong>{fmt.int(data.live.open_complaints)}</strong></article>
+        <article><span>Nachrichten geplant</span><strong>{fmt.int(data.live.queued_messages)}</strong></article>
+        <article><span>Anrufe, 7 Tage</span><strong>{fmt.int(data.live.calls_7d)}</strong></article>
+      </section>
       <section className="hero-metrics" aria-label="Monatliche Kernzahlen">
         <article className="metric-panel bookings-panel">
           <div className="metric-head"><span>Buchungen</span><span>Monat bis heute</span></div>

@@ -1,104 +1,95 @@
-# Service 5 — WhatsApp + Instagram Automation
+# ManyChat — Instagram & WhatsApp DM automation
 
-## Read this first
+ManyChat handles the conversation inside Instagram / WhatsApp. This system handles what happens
+next: the lead is recorded with source attribution, followed up within minutes, and followed up
+again until they book — and the DM follow-ups themselves are sent back through ManyChat.
 
-ManyChat flows are built by clicking in its UI. There is no meaningful "deploy from code" path, so
-this is a **runbook**, not a program. Anyone claiming to ship this as source is shipping a diagram.
+Two integration points, both in this repo:
 
-The deliverable is: this document, a ManyChat flow export per client, and screenshots of the built
-flow. Budget 2–3 hours of clicking per client.
-
-## The long pole
-
-Meta Business verification gates everything here and takes days to weeks. **Start it on onboarding
-day one**, before any build work. Every other service can go live without it; this one cannot.
-
-Prerequisites, all client-side:
-- Instagram Business account (not Personal, not Creator)
-- Facebook Page linked to that Instagram account
-- Meta Business Manager, verified
-- WhatsApp Business number — dedicated, and not already registered to WhatsApp anywhere
-
-That last one traps people. If the owner's number is already on consumer WhatsApp it must be deleted
-from that account first, and that removes their chat history. Warn them before they do it, in writing.
-
-## Flow 1 — Instagram DM
-
-**Triggers:** direct DM, Story reply, comment containing `price`, `prices`, `info`, `book`, or the
-"DM us to book" CTA.
-
-```
-Trigger
-  └─ Welcome: "Hi! Thanks for messaging {{salon_name}} 👋 What can I help with?"
-      └─ Quick replies: [Book an appointment] [Prices] [Opening hours] [Something else]
-          ├─ Book      → Qualify flow
-          ├─ Prices    → Service menu card → "Want to book?" → Qualify flow
-          ├─ Hours     → Hours card → "Want to book?" → Qualify flow
-          └─ Something else → Free text → complaint check → human handoff
-```
-
-**Qualify flow** — one question per message, never batched:
-1. Which service?
-2. Been in before? (yes/no — returning clients get their stylist offered)
-3. Roughly when? (this week / next week / flexible)
-4. Send booking link, or hand to a human on read-only tier
-
-Then: push contact to GHL with `source = instagram_dm`. If no booking within 2 hours, trigger Lead
-Follow-Up (Service 4.1).
-
-## Flow 2 — WhatsApp
-
-Same tree. Two differences that matter:
-
-- **The 24-hour window.** Outside 24 hours from the user's last message you may only send an approved
-  template. Free-form sends will fail. Every reminder in Service 4.2 is therefore a template and must
-  be submitted for approval in advance.
-- Templates need approval per language. Submit German and English at the same time; approval takes
-  hours to days and rejections are common on first submission for anything that reads as marketing.
-
-Templates to submit up front:
-| Name | Purpose | Timing |
+| Direction | What | Where |
 |---|---|---|
-| `appointment_confirmation` | Booking confirmed | On booking |
-| `reminder_48h` | Confirmation + reschedule link | T-48h |
-| `reminder_2h` | Final nudge | T-2h |
-| `noshow_followup` | Missed appointment | +30 min |
-| `noshow_day3` | Second attempt, optional incentive | Day 3 |
-| `review_request` | Post-visit feedback ask | +2h after completion |
+| ManyChat → AIOS | a qualified DM becomes a lead | `POST /webhook/manychat-lead` |
+| AIOS → ManyChat | follow-up DMs to that subscriber | `ManyChatTransport` (`MANYCHAT_API_KEY`) |
 
-## Flow 3 — Complaint interception
+## Prerequisites (Meta, not code — start on onboarding day one)
 
-Runs **before** any automated reply on both channels.
+1. Instagram **Business** account, linked to a Facebook Page the client administers.
+2. Meta Business verification for the client's legal entity. Days to weeks.
+3. ManyChat Pro account connected to that Instagram account (and WhatsApp, once the WABA is approved).
 
-Keyword and intent check for dissatisfaction — refund, complaint, terrible, ruined, damaged, allergic,
-burnt, "worst", legal. On a hit:
-1. Stop the automation. Send no automated answer.
-2. Tag the contact `complaint`.
-3. Alert the owner immediately.
-4. Reply once, plainly: "I'm sorry — I'm passing this to {{owner_name}} now, someone will be in touch
-   today."
+Nothing below works until step 2 clears. Everything below can be built and tested in ManyChat's
+preview mode before that.
 
-This is a hard invariant, matching Service 3. An automated cheerful reply to "you burnt my hair" is
-how a salon ends up on the local news.
+## 1. Inbound: DM → lead
 
-## Handoff to human
+Build one flow in ManyChat, triggered by: direct message, Story reply, comment keyword
+(`price`, `info`, `book`), and the "DM us to book" CTA.
 
-ManyChat Live Chat. Pause automation for 24 hours whenever a human replies, so the bot does not
-interrupt a real conversation. Set this — it is not the default.
+Flow shape:
+1. Welcome message with the service menu as quick replies.
+2. Ask three things, saving each to a **Custom User Field**: `service`, `urgency`
+   (Sofort / Diese Woche / Flexibel), `preferred_time`.
+3. Ask for a phone number only if they want WhatsApp reminders; save to the built-in phone field.
+4. **External Request** action → this is the hand-off:
 
-## Out of hours
+```
+Method   POST
+URL      https://<API_BASE_URL>/webhook/manychat-lead
+Headers  content-type: application/json
+         x-retell-webhook-secret: <RETELL_WEBHOOK_SECRET>
+Body     {
+           "subscriber_id": "{{subscriber_id}}",
+           "first_name":    "{{first_name}}",
+           "last_name":     "{{last_name}}",
+           "ig_username":   "{{ig_username}}",
+           "phone":         "{{phone}}",
+           "email":         "{{email}}",
+           "channel":       "instagram",
+           "custom_fields": {
+             "service":        "{{cuf_service}}",
+             "urgency":        "{{cuf_urgency}}",
+             "preferred_time": "{{cuf_preferred_time}}"
+           }
+         }
+```
 
-Do not pretend to be open. "We're closed right now, but I've got your message and someone will reply
-first thing. If it's urgent, call {{phone}}." Then log a callback request.
+Use `"channel": "whatsapp"` in the WhatsApp version of the flow.
 
-## Testing before go-live
+The response includes `leadId`, `channel` and `followUpsScheduled`. Map `message` to a text
+step if you want ManyChat to confirm ("Danke — wir melden uns in wenigen Minuten").
 
-- [ ] DM from an account that has never messaged the business
-- [ ] Story reply trigger
-- [ ] Comment keyword trigger
-- [ ] Each quick-reply branch
-- [ ] Complaint keyword — confirm automation stops and owner is alerted
-- [ ] Human handoff pauses the bot
-- [ ] Out-of-hours message
-- [ ] WhatsApp template send outside the 24-hour window actually delivers
-- [ ] Contact lands in GHL with correct source attribution
+5. Final step: send the booking link (`links.booking` in tenant config) or hand off to a human
+   with ManyChat's *Assign to team member*.
+
+Field names: ManyChat exposes custom fields as `{{cuf_<name>}}` in the External Request body
+editor. Verify the exact token in your account — ManyChat has renamed these before.
+
+## 2. Outbound: follow-up DMs through ManyChat
+
+Set on the API:
+
+```
+MANYCHAT_API_KEY=<ManyChat → Settings → API → Generate>
+MESSAGE_TRANSPORT_INSTAGRAM=manychat
+```
+
+Every lead that arrived from Instagram gets its ladder (instant, day 1, day 3, day 7, day 14)
+delivered as DMs to that subscriber. Consent is implicit: the subscriber id only exists because
+they messaged the page. Meta's 24-hour rule applies — sends outside the window use the
+`ACCOUNT_UPDATE` tag, which covers appointment and enquiry updates. Marketing content is not
+allowed there; keep the templates as they are.
+
+Test without Meta: `curl` the webhook above with a made-up `subscriber_id` and watch the
+Nachrichten page in the dashboard queue five Instagram messages. They will show as *Simuliert*
+until `MANYCHAT_API_KEY` is set, and as *Abgebrochen* if ManyChat rejects the subscriber id.
+
+## 3. What the dashboard shows
+
+Leads page: source *Instagram*, channel *Instagram*, follow-ups sent, next follow-up time.
+Booking through the receptionist or the website with the same phone number closes the ladder
+automatically.
+
+## Not in scope here
+
+Story posting, comment moderation, ad campaigns. ManyChat's own UI is the deliverable for the
+conversation; this document is the contract between it and the rest of the system.

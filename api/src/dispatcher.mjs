@@ -36,6 +36,7 @@ function recipientFor(message) {
   }
   if (message.channel === "email") return message.email || null;
   if (message.channel === "whatsapp" || message.channel === "sms") return message.phone_e164 || null;
+  if (message.channel === "instagram") return message.manychat_subscriber_id || null;
   return null;
 }
 
@@ -44,6 +45,8 @@ function hasConsent(message) {
   if (message.channel === "email") return message.email_consent === true;
   if (message.channel === "whatsapp") return message.whatsapp_consent === true;
   if (message.channel === "sms") return message.sms_consent === true;
+  // Instagram DMs go through ManyChat; a subscriber id only exists because the person messaged the page.
+  if (message.channel === "instagram") return Boolean(message.manychat_subscriber_id);
   return false;
 }
 
@@ -171,7 +174,7 @@ export class MessageDispatcher {
           m.id::text, m.tenant_id::text, m.contact_id::text, m.appointment_id::text,
           m.channel, m.direction, m.body, m.template_id, m.delivery_status, m.scheduled_for,
           s.attempt_count,
-          c.first_name, c.email, c.phone_e164, c.email_consent, c.whatsapp_consent, c.sms_consent,
+          c.first_name, c.email, c.phone_e164, c.email_consent, c.manychat_subscriber_id, c.whatsapp_consent, c.sms_consent,
           a.starts_at, a.ends_at, a.service, a.staff,
           t.name as tenant_name, t.locale, t.fallback_locale, t.timezone,
           t.quiet_hours, t.review_config, t.messaging_config,

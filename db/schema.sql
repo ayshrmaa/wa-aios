@@ -56,10 +56,12 @@ create table contacts (
   email_consent boolean not null default false,
   sms_consent boolean not null default false,
   source text not null check (source in ('call', 'instagram', 'whatsapp', 'website', 'google')),
+  manychat_subscriber_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (tenant_id, ghl_contact_id),
-  unique (tenant_id, phone_e164)
+  unique (tenant_id, phone_e164),
+  unique (tenant_id, manychat_subscriber_id)
 );
 
 create table appointments (
@@ -173,6 +175,24 @@ exception
     return query select false, null::uuid;
 end;
 $$;
+
+-- Service 4.1: every inquiry from any channel, with source attribution and pipeline status.
+create table leads (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  contact_id uuid not null references contacts(id) on delete cascade,
+  source text not null check (source in ('website', 'instagram', 'whatsapp', 'call', 'google', 'manual')),
+  channel text check (channel in ('whatsapp', 'sms', 'email', 'instagram')),
+  service_interest text,
+  urgency text not null default 'flexible' check (urgency in ('now', 'this_week', 'flexible')),
+  preferred_time text,
+  notes text,
+  status text not null default 'new' check (status in ('new', 'contacted', 'qualified', 'booked', 'lost')),
+  booked_appointment_id uuid references appointments(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index leads_tenant_status_idx on leads (tenant_id, status, created_at desc);
 
 create table messages (
   id uuid primary key default gen_random_uuid(),

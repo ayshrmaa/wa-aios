@@ -206,6 +206,33 @@ select
   starts_at + interval '1 day'
 from candidates;
 
+-- Service 4.1 demo leads: recent contacts become pipeline entries with realistic statuses.
+insert into leads (tenant_id, contact_id, source, channel, service_interest, urgency, preferred_time, notes, status, booked_appointment_id, created_at, updated_at)
+select c.tenant_id, c.id, c.source,
+  case c.source when 'instagram' then 'instagram' when 'whatsapp' then 'whatsapp' else 'email' end,
+  (array['Balayage', 'Cut & Finish', 'Gloss & Care', 'Men''s Cut'])[(c.n % 4) + 1],
+  (array['now', 'this_week', 'flexible'])[(c.n % 3) + 1],
+  case when c.n % 2 = 0 then 'Samstagvormittag' when c.n % 5 = 0 then 'Abends nach 18:00' end,
+  case when c.n % 6 = 0 then 'Möchte vorher eine Beratung.' end,
+  case when a.id is not null then 'booked'
+       when c.n % 7 = 0 then 'lost'
+       when c.n % 3 = 0 then 'qualified'
+       when c.n % 5 = 0 then 'new'
+       else 'contacted' end,
+  a.id,
+  c.created_at + interval '4 minutes',
+  c.created_at + interval '1 day'
+from (
+  select c.*, row_number() over (order by c.created_at desc) as n
+  from contacts c
+  where c.tenant_id = ${literal(config.tenantId)}::uuid and c.created_at >= now() - interval '21 days'
+) c
+left join lateral (
+  select id from appointments a
+  where a.contact_id = c.id and a.created_at >= c.created_at
+  order by a.created_at limit 1
+) a on true;
+
 with contact_pool as (
   select id, row_number() over (order by created_at, id) as n, count(*) over () as total
   from contacts where tenant_id = ${literal(config.tenantId)}::uuid

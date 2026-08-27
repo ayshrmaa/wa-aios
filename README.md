@@ -25,9 +25,10 @@ Then, in another terminal:
 cd api && npm test
 ```
 
-17 tests. They exercise a live HTTP server against a real database — booking, the
+30 tests. They exercise a live HTTP server against a real database — booking, the
 double-booking race, per-stylist calendars, closures, no-show inference, reminder
-scheduling, and message dispatch. If these pass, the core works.
+scheduling, message dispatch, lead follow-up ladders, ManyChat intake, Google auth,
+and the dashboard API. If these pass, the core works.
 
 ---
 
@@ -35,16 +36,16 @@ scheduling, and message dispatch. If these pass, the core works.
 
 | Directory | What it is | State |
 |---|---|---|
-| `api/` | Booking engine + message dispatcher. The heart of the system. | Working, 17 tests passing |
+| `api/` | Booking engine, lead follow-up, message dispatcher, dashboard API. The heart of the system. | Working, 30 tests passing |
 | `retell/` | Voice agent prompt and config for Retell | Working, deployed |
-| `dashboard/` | Owner-facing metrics dashboard (Next.js) | Working |
+| `dashboard/` | Owner app: overview, appointments, calls, leads pipeline, reviews & complaints, messages. Login-protected, live from the API. | Working |
 | `website-template/` | Salon landing page with a browser "talk to the receptionist" button | Working |
 | `audit-generator/` | Sales tool: discovery inputs → branded PDF | Working |
 | `workflows/` | n8n workflows (alternative to `api/` for no-code editing) | Valid, unused by default |
 | `db/` | Schema, seed data, migrations | Working |
 | `compliance/` | Five Swiss legal document drafts | Drafts — need a lawyer |
 | `onboarding/` | Client intake form and go-live checklist | Written |
-| `manychat/` | Instagram/WhatsApp DM runbook | Written, blocked on Meta |
+| `manychat/` | Instagram/WhatsApp: DM → lead webhook, follow-up DMs via ManyChat API, flow runbook | Code done, blocked on Meta |
 | `config/tenant.demo.json` | Every salon-specific value. One file per client. | — |
 
 **Installing this into a real salon: follow "Install into a new business" in
@@ -70,6 +71,8 @@ and visible — `NullTransport` logs exactly what it would have sent and marks t
 |---|---|---|
 | Bookings in a real calendar | Google Calendar OAuth | Free |
 | Reminders and review requests actually sending | Resend API key | Free to 3,000/mo |
+| Instagram DM follow-ups | ManyChat API key (after Meta verification) | ManyChat Pro |
+| Owner dashboard on live data | `DASHBOARD_API_TOKEN` on both sides + `DASHBOARD_PASSWORD` | Free |
 | Data that survives a restart | Postgres — Supabase, **EU region** | Free tier |
 | The agent answering a real phone | Retell key + a number | ~$0.10/min, $2/mo per number |
 
@@ -129,4 +132,4 @@ None of these are code problems. Nothing in this repo unblocks them.
 | `npm run retell:sync` | re-points the agent's tool URLs after the API moves |
 | `npm run google:consent` | one-time Google Calendar authorisation → refresh token |
 | `npm run seed:regenerate` | rebuilds demo data and the dashboard snapshot, runs consistency assertions |
-| `npm test` | 22 tests against a live API server and real database |
+| `npm test` | 30 tests against a live API server and real database |

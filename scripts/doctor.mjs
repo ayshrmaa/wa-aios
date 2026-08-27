@@ -89,6 +89,16 @@ if (!env.RETELL_API_KEY) {
   }
 }
 
+// 3b. dashboard API
+if (!env.DASHBOARD_API_TOKEN) line("WARN", "DASHBOARD_API_TOKEN unset", "the owner dashboard cannot read live data (/api/dashboard/* returns 503)");
+else {
+  const d = await fetchJson(`${apiBase}/api/dashboard/overview`, { headers: { authorization: `Bearer ${env.DASHBOARD_API_TOKEN}` } });
+  line(d.status === 200 ? "PASS" : "FAIL", "dashboard API", d.status === 200 ? `live: ${d.json.live.upcoming_appointments} upcoming, ${d.json.live.open_leads} open leads` : `HTTP ${d.status}`);
+}
+if (!env.DASHBOARD_PASSWORD) line("WARN", "DASHBOARD_PASSWORD unset", "dashboard is open to anyone with the URL — fine for a demo, not for a salon");
+if (env.MANYCHAT_API_KEY) line("PASS", "ManyChat", "API key set — Instagram/WhatsApp DM follow-ups can send");
+else line("WARN", "ManyChat", "MANYCHAT_API_KEY unset — Instagram leads are captured but DM follow-ups stay stubbed");
+
 // 4. calendar
 const provider = env.CALENDAR_PROVIDER || "local";
 if (provider === "local") line("WARN", "CALENDAR_PROVIDER=local", "bookings go to the embedded calendar, not Google. Fine for demo, not production.");

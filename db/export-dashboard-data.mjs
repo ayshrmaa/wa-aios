@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
+import { DashboardApi } from "../api/src/dashboard-api.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const output = path.resolve(here, "../dashboard/data/seed-dashboard.json");
@@ -27,7 +28,24 @@ const kpis = (await db.query(`
   from kpi_daily order by kpi_date
 `)).rows;
 
+const api = new DashboardApi({ db });
+const tenantId = tenant.id;
+const u = (q = "") => new URL(`http://snapshot/?${q}`);
+const [overview, upcoming, past, calls, leads, reviews, messages] = await Promise.all([
+  api.overview(tenantId),
+  api.appointments(tenantId, u("limit=200")),
+  api.appointments(tenantId, u("scope=past&limit=200")),
+  api.calls(tenantId, u("limit=200")),
+  api.leads(tenantId, u("limit=200")),
+  api.reviews(tenantId, u("limit=200")),
+  api.messages(tenantId, u("limit=200"))
+]);
 await mkdir(path.dirname(output), { recursive: true });
-await writeFile(output, JSON.stringify({ generatedAt: new Date().toISOString(), tenant, kpis }, null, 2) + "\n");
+await writeFile(output, JSON.stringify({
+  generatedAt: new Date().toISOString(), tenant, kpis, live: overview.live,
+  appointments: { upcoming: upcoming.appointments, past: past.appointments },
+  calls: calls.calls, leads: leads.leads, funnel: leads.funnel,
+  reviews: reviews.reviews, complaints: reviews.complaints, messages: messages.messages
+}, null, 2) + "\n");
 console.log(`Wrote ${output} with ${kpis.length} KPI days`);
 await db.close();
