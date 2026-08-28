@@ -2,7 +2,9 @@ services:
   - type: web
     name: wa-aios-api
     runtime: node
-    plan: free
+    # Starter ($7/mo): free instances sleep after 15 min and take ~50s to wake,
+    # which drops live phone calls. Do not use free for a real demo.
+    plan: starter
     buildCommand: cd api && npm ci
     startCommand: cd api && npm run migrate && npm start
     healthCheckPath: /health
@@ -17,9 +19,20 @@ services:
         value: verify-full
       - key: DATABASE_SSL_CA
         sync: false
+      # Step 3 deploys in local calendar mode; flip to google + add the
+      # GOOGLE_OAUTH_* vars in Step 5 once the refresh token exists.
       - key: CALENDAR_PROVIDER
         value: local
+      # Option 2a: install the seeded Atelier Nova demo tenant + its historical
+      # demo data so the dashboard looks populated for sales demos. Real bookings
+      # and leads are added on top during testing.
+      - key: MIGRATE_SEED
+        value: true
       - key: RETELL_WEBHOOK_SECRET
+        generateValue: true
+      # Bearer token the owner dashboard uses to read /api/dashboard/*. Copy the
+      # generated value into the dashboard deployment's DASHBOARD_API_TOKEN.
+      - key: DASHBOARD_API_TOKEN
         generateValue: true
       - key: TRUST_PROXY
         value: true
