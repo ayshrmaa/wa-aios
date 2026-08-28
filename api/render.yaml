@@ -17,8 +17,18 @@ services:
           property: connectionString
       - key: DATABASE_SSL
         value: disable
+      # Bookings/availability use one shared Google Calendar
+      # (tenants.adapter_config.sharedCalendarId = "primary"). The three
+      # GOOGLE_OAUTH_* values are entered in the Render dashboard (sync: false);
+      # the API refuses to boot in google mode without them.
       - key: CALENDAR_PROVIDER
-        value: local
+        value: google
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REFRESH_TOKEN
+        sync: false
       - key: MIGRATE_SEED
         value: true
       - key: RETELL_WEBHOOK_SECRET
