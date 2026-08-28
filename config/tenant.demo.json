@@ -27,6 +27,7 @@
   "booking": {
     "tier": "native",
     "platform": "google_calendar",
+    "sharedCalendarId": "primary",
     "defaultDurationMinutes": 60,
     "slotIntervalMinutes": 30,
     "searchRangeDays": 10,

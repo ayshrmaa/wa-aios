@@ -53,7 +53,27 @@ function resolveService(tenant, requested) {
   );
 }
 
+// A tenant with adapter_config.sharedCalendarId runs one shared calendar for the
+// whole salon: the caller is never asked to choose a stylist and every calendar
+// operation targets that one calendar. The staff[] entries stay in config as
+// internal labels but are not surfaced.
+function sharedCalendarId(tenant) {
+  const id = tenant.adapter_config?.sharedCalendarId;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+function salonAsStaff(tenant) {
+  return { id: "salon", name: tenant.name, calendarId: sharedCalendarId(tenant) };
+}
+
+// Candidate list for availability searches. One synthetic salon entry when a
+// shared calendar is configured, otherwise the configured stylists.
+function bookingCandidates(tenant) {
+  return sharedCalendarId(tenant) ? [salonAsStaff(tenant)] : (tenant.adapter_config.staff ?? []);
+}
+
 function resolveStaff(tenant, requested, defaultFirst = true) {
+  if (sharedCalendarId(tenant)) return salonAsStaff(tenant);
   const staff = tenant.adapter_config.staff ?? [];
   if (!requested) return defaultFirst ? staff[0] : null;
   const key = normaliseSlug(requested);
@@ -365,7 +385,7 @@ export class BookingService {
   async alternatives(tenant, requestedStart, service, requestedStaff, limit = 3) {
     const interval = Number(tenant.adapter_config.slotIntervalMinutes ?? 30);
     const rangeDays = Number(tenant.adapter_config.searchRangeDays ?? 10);
-    const candidates = requestedStaff ? [requestedStaff] : tenant.adapter_config.staff ?? [];
+    const candidates = requestedStaff ? [requestedStaff] : bookingCandidates(tenant);
     const results = [];
     const seen = new Set();
 
@@ -406,7 +426,7 @@ export class BookingService {
     const { service, start, end, opening } = validated;
     const staffCandidates = body.staffId
       ? [validated.staff]
-      : tenant.adapter_config.staff ?? [];
+      : bookingCandidates(tenant);
 
     if (opening.ok) {
       for (const staff of staffCandidates) {
@@ -610,7 +630,9 @@ export class BookingService {
       return { status: "not_found", message: "I could not find that future booked appointment." };
     }
     const existing = existingResult.rows[0];
-    const staff = (tenant.adapter_config.staff ?? []).find((member) => member.calendarId === existing.staff_calendar_id);
+    const staff = sharedCalendarId(tenant)
+      ? salonAsStaff(tenant)
+      : (tenant.adapter_config.staff ?? []).find((member) => member.calendarId === existing.staff_calendar_id);
     const start = parseDate(body.newStartTime);
     if (!start || start.getTime() <= Date.now()) {
       return { status: "not_rescheduled", code: "closed", message: "Please choose a valid future time with its Swiss UTC offset." };

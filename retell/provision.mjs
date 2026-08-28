@@ -34,6 +34,9 @@ const title = (day) => day[0].toUpperCase() + day.slice(1);
 
 export function renderPrompt(template, tenant) {
   const staff = tenant.booking?.staff ?? [];
+  // A tenant with a shared calendar does not let callers pick a stylist, so the
+  // agent is given no stylist list and no staffId to pass.
+  const sharedCalendar = Boolean(tenant.booking?.sharedCalendarId);
   const services = tenant.services ?? [];
   const hours = tenant.booking?.hours ?? {};
   const city = tenant.contact?.address?.split(",").pop()?.replace(/[0-9]/g, "").trim() || "Switzerland";
@@ -58,10 +61,10 @@ export function renderPrompt(template, tenant) {
 
 # SERVICE MENU (authoritative — pass the exact service name as serviceId)
 ${menu || "- (no services configured)"}
-
+${sharedCalendar ? "" : `
 # STYLISTS (pass the id as staffId)
 ${stylists || "- (no stylists configured)"}
-
+`}
 # OPENING HOURS (${tenant.timezone})
 ${openings}
 ${closures.length ? `Closed on: ${closures.join(", ")}.` : ""}

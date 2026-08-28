@@ -68,10 +68,6 @@
             "serviceId": {
               "type": "string",
               "description": "Service id from the knowledge base menu. Determines duration."
-            },
-            "staffId": {
-              "type": "string",
-              "description": "Stylist id. Omit only if the caller has no preference."
             }
           }
         }
@@ -97,10 +93,6 @@
             "serviceId": {
               "type": "string",
               "description": "Service id from the menu"
-            },
-            "staffId": {
-              "type": "string",
-              "description": "Stylist id"
             },
             "customerName": {
               "type": "string",

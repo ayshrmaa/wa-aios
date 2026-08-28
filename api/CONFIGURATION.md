@@ -30,9 +30,15 @@ variables are present and refuses to start if none are — it never falls back t
 5. Run `npm run google:consent` from the repo root. It prints a URL — open it **as the Google
    account that owns the stylist calendars**, approve, and the script prints the
    `GOOGLE_OAUTH_REFRESH_TOKEN` line to add to `.env`.
-6. In Google Calendar, create one calendar per stylist and put each calendar's ID
-   (Settings → Integrate calendar → Calendar ID) into `config/tenant.demo.json` under
-   `booking.staff[].calendarId`.
+6. Point the tenant at a calendar. Two shapes are supported:
+   - **One shared salon calendar** (no stylist selection): set `booking.sharedCalendarId` in
+     `config/tenant.<slug>.json` to the Calendar ID (Settings → Integrate calendar → Calendar ID),
+     or the literal `primary` for the OAuth account's own default calendar. When this is set,
+     `book_appointment` / `check_availability` ignore any `staffId`, the agent is not given a
+     stylist list, and every appointment is written to that one calendar. The `booking.staff[]`
+     entries stay as internal labels.
+   - **Per-stylist calendars**: leave `sharedCalendarId` unset and give each `booking.staff[]`
+     entry its own `calendarId`.
 
 Refresh tokens do not expire unless revoked. Access tokens are minted and cached automatically
 and refreshed a minute before expiry; a 401 from Google triggers exactly one refresh-and-retry.

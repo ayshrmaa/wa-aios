@@ -156,9 +156,9 @@ test("a. booking persists in both the canonical DB and the local calendar", asyn
   console.log(`EVIDENCE a=${JSON.stringify({ available, booking, database: persisted.rows[0] })}`);
 });
 
-test("b. two truly simultaneous bookings for one staff slot produce exactly one clean failure", async () => {
+test("b. two truly simultaneous bookings for one slot produce exactly one clean failure", async () => {
   const startTime = at(futureBookableWeekday("wednesday", 78), "10:00");
-  const common = { startTime, serviceId: "cut-and-finish", staffId: "lea", customerName: "Race" };
+  const common = { startTime, serviceId: "cut-and-finish", customerName: "Race" };
   const [first, second] = await Promise.all([
     post("book-appointment", { ...common, customerPhone: "+41794440002" }),
     post("book-appointment", { ...common, customerPhone: "+41794440003" })
@@ -175,31 +175,35 @@ test("b. two truly simultaneous bookings for one staff slot produce exactly one 
     from appointments
     where tenant_id = $1::uuid and staff_calendar_id = $2
       and starts_at = $3::timestamptz and status = 'booked'
-  `, [tenantId, "lea.atelier-nova@calendar.demo", startTime]);
+  `, [tenantId, "primary", startTime]);
   assert.equal(count.rows[0].booked, 1);
   console.log(`EVIDENCE b=${JSON.stringify({ parallelResponses: [first, second], databaseBookedCount: count.rows[0].booked })}`);
 });
 
-test("c. different stylists can book the same clock time", async () => {
+test("c. the shared salon calendar blocks a second booking at the same clock time", async () => {
   const startTime = at(futureBookableWeekday("thursday", 86), "12:00");
-  const [lea, noemi] = await Promise.all([
+  const [first, second] = await Promise.all([
     post("book-appointment", {
-      startTime, serviceId: "cut-and-finish", staffId: "lea",
-      customerName: "Parallel Lea", customerPhone: "+41794440004"
+      startTime, serviceId: "cut-and-finish",
+      customerName: "Parallel A", customerPhone: "+41794440004"
     }),
     post("book-appointment", {
-      startTime, serviceId: "cut-and-finish", staffId: "noemi",
-      customerName: "Parallel Noemi", customerPhone: "+41794440005"
+      startTime, serviceId: "cut-and-finish",
+      customerName: "Parallel B", customerPhone: "+41794440005"
     })
   ]);
-  assert.equal(lea.status, "booked");
-  assert.equal(noemi.status, "booked");
+  const booked = [first, second].filter((result) => result.status === "booked");
+  const rejected = [first, second].filter((result) => result.status === "not_booked");
+  assert.equal(booked.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].code, "slot_taken");
   const count = await runtime.db.query(`
     select count(*)::int as booked, count(distinct staff_calendar_id)::int as calendars
-    from appointments where id in ($1::uuid, $2::uuid) and status = 'booked'
-  `, [lea.appointmentId, noemi.appointmentId]);
-  assert.deepEqual(count.rows[0], { booked: 2, calendars: 2 });
-  console.log(`EVIDENCE c=${JSON.stringify({ responses: [lea, noemi], database: count.rows[0] })}`);
+    from appointments
+    where tenant_id = $1::uuid and starts_at = $2::timestamptz and status = 'booked'
+  `, [tenantId, startTime]);
+  assert.deepEqual(count.rows[0], { booked: 1, calendars: 1 });
+  console.log(`EVIDENCE c=${JSON.stringify({ responses: [first, second], database: count.rows[0] })}`);
 });
 
 test("d. weekly closure, tenant closure date, Swiss holiday, and outside hours are rejected", async () => {
