@@ -31,6 +31,15 @@ services:
         sync: false
       - key: MIGRATE_SEED
         value: true
+      # Instagram/WhatsApp DM follow-ups go out through ManyChat. Enter
+      # MANYCHAT_API_KEY (ManyChat -> Settings -> API) in the Render dashboard;
+      # enter it in the SAME deploy that sets MESSAGE_TRANSPORT_INSTAGRAM=manychat,
+      # otherwise Instagram follow-up messages error instead of staying stubbed.
+      # Inbound (/webhook/manychat-lead) needs neither and is already live.
+      - key: MANYCHAT_API_KEY
+        sync: false
+      - key: MESSAGE_TRANSPORT_INSTAGRAM
+        value: manychat
       - key: RETELL_WEBHOOK_SECRET
         generateValue: true
       - key: DASHBOARD_API_TOKEN
