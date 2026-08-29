@@ -34,6 +34,9 @@ const title = (day) => day[0].toUpperCase() + day.slice(1);
 
 export function renderPrompt(template, tenant) {
   const staff = tenant.booking?.staff ?? [];
+  // A tenant with a shared calendar does not let callers pick a stylist, so the
+  // agent is given no stylist list and no staffId to pass.
+  const sharedCalendar = Boolean(tenant.booking?.sharedCalendarId);
   const services = tenant.services ?? [];
   const hours = tenant.booking?.hours ?? {};
   const city = tenant.contact?.address?.split(",").pop()?.replace(/[0-9]/g, "").trim() || "Switzerland";
@@ -58,10 +61,10 @@ export function renderPrompt(template, tenant) {
 
 # SERVICE MENU (authoritative — pass the exact service name as serviceId)
 ${menu || "- (no services configured)"}
-
+${sharedCalendar ? "" : `
 # STYLISTS (pass the id as staffId)
 ${stylists || "- (no stylists configured)"}
-
+`}
 # OPENING HOURS (${tenant.timezone})
 ${openings}
 ${closures.length ? `Closed on: ${closures.join(", ")}.` : ""}
@@ -154,7 +157,12 @@ export async function main() {
     language: template.language || "multi",
     post_call_analysis_data: template.post_call_analysis_data ?? [],
     max_call_duration_ms: template.max_call_duration_ms ?? 600000,
-    interruption_sensitivity: template.interruption_sensitivity ?? 0.9
+    interruption_sensitivity: template.interruption_sensitivity ?? 0.9,
+    // Retell POSTs call_started / call_ended / call_analyzed here. The API
+    // ingests the recording URL, transcript and structured outcome.
+    webhook_url: `${apiBaseUrl}/webhook/retell`,
+    // Keep the recording + transcript so the dashboard can play/read them.
+    data_storage_setting: template.data_storage_setting || "everything"
   };
 
   const ids = await readIds(env);

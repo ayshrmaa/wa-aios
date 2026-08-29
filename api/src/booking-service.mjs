@@ -42,7 +42,10 @@ function toTenant(row) {
     services: jsonValue(row.services, []),
     quiet_hours: jsonValue(row.quiet_hours, { start: "21:00", end: "08:00" }),
     review_config: jsonValue(row.review_config, {}),
-    messaging_config: jsonValue(row.messaging_config, { mode: "stub" })
+    messaging_config: jsonValue(row.messaging_config, { mode: "stub" }),
+    contact_config: jsonValue(row.contact_config, {}),
+    links: jsonValue(row.links, {}),
+    branding: jsonValue(row.branding, {})
   };
 }
 
@@ -53,7 +56,27 @@ function resolveService(tenant, requested) {
   );
 }
 
+// A tenant with adapter_config.sharedCalendarId runs one shared calendar for the
+// whole salon: the caller is never asked to choose a stylist and every calendar
+// operation targets that one calendar. The staff[] entries stay in config as
+// internal labels but are not surfaced.
+function sharedCalendarId(tenant) {
+  const id = tenant.adapter_config?.sharedCalendarId;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+function salonAsStaff(tenant) {
+  return { id: "salon", name: tenant.name, calendarId: sharedCalendarId(tenant) };
+}
+
+// Candidate list for availability searches. One synthetic salon entry when a
+// shared calendar is configured, otherwise the configured stylists.
+function bookingCandidates(tenant) {
+  return sharedCalendarId(tenant) ? [salonAsStaff(tenant)] : (tenant.adapter_config.staff ?? []);
+}
+
 function resolveStaff(tenant, requested, defaultFirst = true) {
+  if (sharedCalendarId(tenant)) return salonAsStaff(tenant);
   const staff = tenant.adapter_config.staff ?? [];
   if (!requested) return defaultFirst ? staff[0] : null;
   const key = normaliseSlug(requested);
@@ -164,6 +187,47 @@ async function queueMessage(client, {
     new Date(scheduledFor).toISOString()
   ]);
   return rendered;
+}
+
+// Immediate booking confirmation. Email when we have one (it carries the most
+// detail), WhatsApp otherwise. Queued for "now" so the dispatcher sends it on
+// its next cycle — subject to the same consent and quiet-hours rules.
+async function scheduleConfirmation(client, tenant, appointment, { channel } = {}) {
+  const useChannel = channel || (appointment.contact_email ? "email" : "whatsapp");
+  await queueMessage(client, {
+    tenant,
+    contactId: appointment.contact_id,
+    appointmentId: appointment.id,
+    channel: useChannel,
+    templateId: "appointment_confirmation",
+    scheduledFor: new Date(),
+    contact: { first_name: appointment.contact_first_name },
+    appointment
+  });
+  await client.query(`
+    insert into sequence_runs (tenant_id, contact_id, appointment_id, sequence_type, status, current_step, next_fire_at, metadata)
+    values ($1::uuid, $2::uuid, $3::uuid, 'appointment_confirmation', 'completed', 'appointment_confirmation', null, $4::jsonb)
+  `, [tenant.id, appointment.contact_id, appointment.id, JSON.stringify({ channel: useChannel })]);
+}
+
+// Post-visit thank-you, queued for the appointment end time. The completion
+// sweep also schedules the review request separately.
+async function scheduleCompletionMessage(client, tenant, appointment) {
+  const useChannel = appointment.contact_email ? "email" : "whatsapp";
+  await queueMessage(client, {
+    tenant,
+    contactId: appointment.contact_id,
+    appointmentId: appointment.id,
+    channel: useChannel,
+    templateId: "appointment_completion",
+    scheduledFor: new Date(new Date(appointment.ends_at).getTime() + 30 * 60_000),
+    contact: { first_name: appointment.contact_first_name },
+    appointment
+  });
+  await client.query(`
+    insert into sequence_runs (tenant_id, contact_id, appointment_id, sequence_type, status, current_step, next_fire_at, metadata)
+    values ($1::uuid, $2::uuid, $3::uuid, 'appointment_completion', 'completed', 'appointment_completion', null, $4::jsonb)
+  `, [tenant.id, appointment.contact_id, appointment.id, JSON.stringify({ channel: useChannel })]);
 }
 
 async function scheduleReminders(client, tenant, appointment) {
@@ -307,14 +371,14 @@ async function invalidateReminders(client, appointmentId, reason) {
     update messages
     set delivery_status = 'failed'
     where appointment_id = $1::uuid
-      and template_id in ('appointment_t_48h', 'appointment_t_24h', 'appointment_t_2h')
+      and template_id in ('appointment_t_48h', 'appointment_t_24h', 'appointment_t_2h', 'appointment_completion')
       and delivery_status = 'queued'
   `, [appointmentId]);
   await client.query(`
     update sequence_runs
     set status = 'exited', exit_reason = $2, next_fire_at = null
     where appointment_id = $1::uuid
-      and sequence_type = 'appointment_reminder'
+      and sequence_type in ('appointment_reminder', 'appointment_completion')
       and status = 'active'
   `, [appointmentId, reason]);
 }
@@ -329,8 +393,9 @@ export class BookingService {
 
   async tenant(tenantId = DEFAULT_TENANT_ID, client = this.db) {
     const result = await client.query(`
-      select id::text, name, locale, fallback_locale, timezone, avg_appointment_value_chf,
-             adapter_config, services, quiet_hours, review_config, messaging_config
+      select id::text, slug, name, locale, fallback_locale, timezone, currency, avg_appointment_value_chf,
+             adapter_config, services, quiet_hours, review_config, messaging_config,
+             contact_config, links, branding
       from tenants where id = $1::uuid
     `, [tenantId]);
     if (!result.rows.length) throw new Error(`Tenant ${tenantId} was not found.`);
@@ -365,7 +430,7 @@ export class BookingService {
   async alternatives(tenant, requestedStart, service, requestedStaff, limit = 3) {
     const interval = Number(tenant.adapter_config.slotIntervalMinutes ?? 30);
     const rangeDays = Number(tenant.adapter_config.searchRangeDays ?? 10);
-    const candidates = requestedStaff ? [requestedStaff] : tenant.adapter_config.staff ?? [];
+    const candidates = requestedStaff ? [requestedStaff] : bookingCandidates(tenant);
     const results = [];
     const seen = new Set();
 
@@ -406,7 +471,7 @@ export class BookingService {
     const { service, start, end, opening } = validated;
     const staffCandidates = body.staffId
       ? [validated.staff]
-      : tenant.adapter_config.staff ?? [];
+      : bookingCandidates(tenant);
 
     if (opening.ok) {
       for (const staff of staffCandidates) {
@@ -533,8 +598,31 @@ export class BookingService {
           insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)
           values ($1::uuid, 'appointment', $2::uuid, 'appointment.created', 'api.booking', $3::jsonb)
         `, [tenant.id, appointment.id, JSON.stringify({ externalId: createdEvent.id, staff: staff.name })]);
-        await scheduleReminders(tx, tenant, { ...appointment, contact_first_name: firstName(body.customerName) });
+        const apptForMessaging = {
+          ...appointment,
+          contact_first_name: firstName(body.customerName),
+          contact_email: body.customerEmail || null
+        };
+        await scheduleConfirmation(tx, tenant, apptForMessaging);
+        await scheduleReminders(tx, tenant, apptForMessaging);
+        await scheduleCompletionMessage(tx, tenant, apptForMessaging);
         await markLeadBooked(tx, tenant.id, appointment.contact_id, appointment.id);
+        await tx.query(`
+          update contacts set
+            lifecycle_stage = case when lifecycle_stage = 'lead' then 'active' else lifecycle_stage end,
+            last_interaction_at = now(), last_interaction_kind = 'appointment',
+            first_booked_at = coalesce(first_booked_at, $2::timestamptz),
+            last_booked_at = greatest(coalesce(last_booked_at, '-infinity'::timestamptz), $2::timestamptz),
+            total_bookings = total_bookings + 1,
+            updated_at = now()
+          where id = $1::uuid
+        `, [appointment.contact_id, appointment.starts_at]);
+        await tx.query(`
+          insert into contact_notes (tenant_id, contact_id, author, kind, body, metadata)
+          values ($1::uuid, $2::uuid, 'system', 'appointment', $3, $4::jsonb)
+        `, [tenant.id, appointment.contact_id,
+            `Booked ${service.name} with ${staff.name}`,
+            JSON.stringify({ appointmentId: appointment.id, startsAt: appointment.starts_at, via: body.bookedVia || "call" })]);
         await tx.query("delete from booking_slot_locks where id = $1::uuid", [lock.lock_id]);
         return { appointment };
       });
@@ -610,7 +698,9 @@ export class BookingService {
       return { status: "not_found", message: "I could not find that future booked appointment." };
     }
     const existing = existingResult.rows[0];
-    const staff = (tenant.adapter_config.staff ?? []).find((member) => member.calendarId === existing.staff_calendar_id);
+    const staff = sharedCalendarId(tenant)
+      ? salonAsStaff(tenant)
+      : (tenant.adapter_config.staff ?? []).find((member) => member.calendarId === existing.staff_calendar_id);
     const start = parseDate(body.newStartTime);
     if (!start || start.getTime() <= Date.now()) {
       return { status: "not_rescheduled", code: "closed", message: "Please choose a valid future time with its Swiss UTC offset." };
@@ -662,6 +752,7 @@ export class BookingService {
         const updated = updatedResult.rows[0];
         await invalidateReminders(tx, existing.id, "rescheduled");
         await scheduleReminders(tx, tenant, { ...updated, contact_first_name: existing.contact_first_name });
+        await scheduleCompletionMessage(tx, tenant, { ...updated, contact_first_name: existing.contact_first_name });
         await tx.query(`
           insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)
           values ($1::uuid, 'appointment', $2::uuid, 'appointment.rescheduled', 'api.booking', $3::jsonb)
@@ -953,35 +1044,92 @@ export class BookingService {
     };
   }
 
-  async sweepNoShows() {
+  // Appointments whose end time has passed and that were never explicitly
+  // marked (no-show / cancelled) are treated as completed. The salon overrides
+  // exceptions from the dashboard via markAppointmentOutcome. Completing an
+  // appointment updates the customer's lifetime rollups and makes it eligible
+  // for the review request (scheduled by sweepReviewRequests in the same cycle).
+  async sweepAppointmentOutcomes() {
+    const graceMinutes = Number(this.env.APPOINTMENT_COMPLETION_GRACE_MINUTES ?? 15);
     const changed = await this.db.query(`
-      with inferred as (
+      with done as (
         update appointments
-        set status = 'no_show', status_source = 'inferred'
-        where status = 'booked' and starts_at <= now() - interval '30 minutes'
-        returning tenant_id, id, starts_at
+        set status = 'completed', status_source = 'inferred'
+        where status = 'booked'
+          and ends_at <= now() - make_interval(mins => $1::int)
+        returning tenant_id, id, contact_id, ends_at, service, value_chf
       ), audit as (
         insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)
-        select tenant_id, 'appointment', id, 'appointment.no_show_inferred', 'api.no_show_detector',
-               jsonb_build_object('startsAt', starts_at)
-        from inferred
+        select tenant_id, 'appointment', id, 'appointment.completed_inferred', 'api.outcome_sweep',
+               jsonb_build_object('endsAt', ends_at)
+        from done
       )
-      select tenant_id::text, id::text from inferred
-    `);
+      select tenant_id::text, id::text, contact_id::text, ends_at, service, value_chf::float8 as value_chf
+      from done
+    `, [Math.max(0, Math.min(1440, graceMinutes))]);
     for (const row of changed.rows) {
-      await this.db.transaction(async (tx) => {
-        const appointment = await tx.query(`
-          select a.*, a.id::text as id, a.contact_id::text as contact_id, c.first_name as contact_first_name
-          from appointments a
-          join contacts c on c.id = a.contact_id
-          where a.tenant_id = $1::uuid and a.id = $2::uuid
-        `, [row.tenant_id, row.id]);
-        if (!appointment.rows.length) return;
-        const tenant = await this.tenant(row.tenant_id, tx);
-        await scheduleNoShowRecovery(tx, tenant, appointment.rows[0]);
-      });
+      await this.db.query(`
+        update contacts set
+          completed_bookings = completed_bookings + 1,
+          lifetime_value_chf = lifetime_value_chf + $2::numeric,
+          lifecycle_stage = case when lifecycle_stage in ('lead', 'inactive') then 'active' else lifecycle_stage end,
+          last_interaction_at = greatest(coalesce(last_interaction_at, '-infinity'::timestamptz), $3::timestamptz),
+          last_interaction_kind = 'appointment',
+          updated_at = now()
+        where id = $1::uuid
+      `, [row.contact_id, row.value_chf, row.ends_at]);
+      await this.db.query(`
+        insert into contact_notes (tenant_id, contact_id, author, kind, body, metadata)
+        values ($1::uuid, $2::uuid, 'system', 'appointment', $3, $4::jsonb)
+      `, [row.tenant_id, row.contact_id, `Completed ${row.service}`, JSON.stringify({ appointmentId: row.id })]);
     }
     return changed.rows.map((row) => row.id);
+  }
+
+  // Backwards-compatible alias: server.mjs and older callers used this name.
+  async sweepNoShows() {
+    return this.sweepAppointmentOutcomes();
+  }
+
+  // Explicit outcome from the dashboard or a staff webhook.
+  async markAppointmentOutcome(tenantId, body) {
+    const tenant = await this.tenant(tenantId);
+    const outcome = String(body.outcome ?? "").toLowerCase();
+    if (!["completed", "no_show", "cancelled"].includes(outcome)) {
+      return { updated: false, code: "invalid_request", message: "outcome must be completed, no_show or cancelled." };
+    }
+    if (!uuidPattern.test(String(body.appointmentId ?? ""))) {
+      return { updated: false, code: "not_found", message: "Unknown appointment." };
+    }
+    return this.db.transaction(async (tx) => {
+      const found = await tx.query(`
+        select a.*, a.id::text as id, a.contact_id::text as contact_id, c.first_name as contact_first_name
+        from appointments a join contacts c on c.id = a.contact_id
+        where a.tenant_id = $1::uuid and a.id = $2::uuid
+      `, [tenant.id, body.appointmentId]);
+      if (!found.rows.length) return { updated: false, code: "not_found", message: "Unknown appointment." };
+      const appt = found.rows[0];
+      await tx.query("update appointments set status = $2, status_source = 'staff' where id = $1::uuid", [appt.id, outcome]);
+      await tx.query(`
+        insert into events (tenant_id, aggregate_type, aggregate_id, event_type, source, payload)
+        values ($1::uuid, 'appointment', $2::uuid, $3, 'api.dashboard', $4::jsonb)
+      `, [tenant.id, appt.id, `appointment.${outcome}`, JSON.stringify({ by: body.by || "staff" })]);
+      if (outcome === "no_show") {
+        await invalidateReminders(tx, appt.id, "no_show");
+        await tx.query("update contacts set no_show_count = no_show_count + 1, updated_at = now() where id = $1::uuid", [appt.contact_id]);
+        await scheduleNoShowRecovery(tx, tenant, appt);
+      } else if (outcome === "cancelled") {
+        await invalidateReminders(tx, appt.id, "cancelled");
+      } else {
+        await tx.query(`
+          update contacts set completed_bookings = completed_bookings + 1,
+            lifetime_value_chf = lifetime_value_chf + $2::numeric,
+            last_interaction_at = now(), last_interaction_kind = 'appointment', updated_at = now()
+          where id = $1::uuid
+        `, [appt.contact_id, Number(appt.value_chf ?? 0)]);
+      }
+      return { updated: true, appointmentId: appt.id, outcome };
+    });
   }
 
   async sweepReviewRequests({ limit = 100 } = {}) {

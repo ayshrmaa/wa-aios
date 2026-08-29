@@ -7,15 +7,23 @@ import { renderMessageTemplate } from "./messaging-templates.mjs";
 export const LEAD_SOURCES = ["website", "instagram", "whatsapp", "call", "google", "manual"];
 export const LEAD_STATUSES = ["new", "contacted", "qualified", "booked", "lost"];
 
-// Follow-up ladder. Step 1 is the "within minutes" promise from the brief.
+// Follow-up ladder — the exact cadence from the brief:
+//   immediate → 10 minutes → 2 hours → next day → 3 days.
+// Every step exits the moment the contact replies or books.
 export const LEAD_LADDER = [
-  { templateId: "lead_followup_instant", sequenceType: "lead_follow_up", offsetMs: 2 * 60_000 },
+  { templateId: "lead_followup_instant", sequenceType: "lead_follow_up", offsetMs: 0 },
+  { templateId: "lead_followup_10min", sequenceType: "lead_follow_up", offsetMs: 10 * 60_000 },
+  { templateId: "lead_followup_2h", sequenceType: "lead_follow_up", offsetMs: 2 * 3_600_000 },
   { templateId: "lead_followup_day_1", sequenceType: "lead_follow_up", offsetMs: 24 * 3_600_000 },
-  { templateId: "lead_followup_day_3", sequenceType: "lead_follow_up", offsetMs: 72 * 3_600_000 },
-  { templateId: "lead_reengage_day_7", sequenceType: "re_engagement", offsetMs: 7 * 86_400_000 },
-  { templateId: "lead_reengage_day_14", sequenceType: "re_engagement", offsetMs: 14 * 86_400_000 }
+  { templateId: "lead_followup_day_3", sequenceType: "lead_follow_up", offsetMs: 72 * 3_600_000 }
 ];
-export const LEAD_TEMPLATE_IDS = LEAD_LADDER.map((step) => step.templateId);
+export const LEAD_TEMPLATE_IDS = [
+  ...new Set([
+    ...LEAD_LADDER.map((step) => step.templateId),
+    // legacy ladder ids that may still be queued from before the cadence change
+    "lead_followup_day_3", "lead_reengage_day_7", "lead_reengage_day_14"
+  ])
+];
 
 const clientError = (message) => Object.assign(new Error(message), { statusCode: 400 });
 
@@ -140,13 +148,13 @@ export async function exitLeadSequences(client, tenantId, contactId, reason) {
   const messages = await client.query(`
     update messages set delivery_status = 'failed'
     where tenant_id = $1::uuid and contact_id = $2::uuid and delivery_status = 'queued'
-      and template_id = any($3::text[])
+      and (template_id = any($3::text[]) or template_id like 'reactivation_%')
     returning id
   `, [tenantId, contactId, LEAD_TEMPLATE_IDS]);
   await client.query(`
     update sequence_runs set status = 'exited', exit_reason = $3, next_fire_at = null, updated_at = now()
     where tenant_id = $1::uuid and contact_id = $2::uuid and status = 'active'
-      and sequence_type in ('lead_follow_up', 're_engagement')
+      and sequence_type in ('lead_follow_up', 're_engagement', 'reactivation')
   `, [tenantId, contactId, reason]);
   return messages.rows.length;
 }
@@ -158,7 +166,18 @@ export async function markLeadBooked(client, tenantId, contactId, appointmentId)
     where tenant_id = $1::uuid and contact_id = $2::uuid and status in ('new', 'contacted', 'qualified')
     returning id
   `, [tenantId, contactId, appointmentId]);
-  return { leadsMarked: r.rows.length, messagesCancelled: cancelled };
+  const reactivated = await client.query(`
+    update reactivation_targets set status = 'booked', booked_appointment_id = $3::uuid, updated_at = now()
+    where tenant_id = $1::uuid and contact_id = $2::uuid and status in ('queued', 'sent', 'responded')
+    returning campaign_id::text
+  `, [tenantId, contactId, appointmentId]);
+  if (reactivated.rows.length) {
+    await client.query(`
+      update reactivation_campaigns set bookings = bookings + 1, updated_at = now()
+      where id = any($1::uuid[])
+    `, [reactivated.rows.map((row) => row.campaign_id)]);
+  }
+  return { leadsMarked: r.rows.length, messagesCancelled: cancelled, reactivationBookings: reactivated.rows.length };
 }
 
 export class LeadService {

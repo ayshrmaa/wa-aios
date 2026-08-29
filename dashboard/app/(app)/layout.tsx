@@ -2,26 +2,73 @@ import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { authRequired, isAuthenticated } from "../../lib/auth";
-import { getTenant, source } from "../../lib/api";
+import { connected, getOverview, getTenants, source } from "../../lib/api";
+import { switchTenant } from "../../lib/actions";
 import { Nav } from "./nav";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   if (!(await isAuthenticated())) redirect("/login");
-  const tenant = await getTenant();
-  const brand = tenant.branding || {};
-  const style = { "--brand": brand.primary || "#173f35", "--accent": brand.accent || "#d8ff73", "--surface": brand.surface || "#f2f5f3", "--ink": brand.ink || "#10231e" } as CSSProperties;
-  const initials = tenant.name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+
+  let tenantName = "Salon";
+  let counts: Record<string, number> = {};
+  const brand: { primary?: string; accent?: string } = {};
+  try {
+    const o = await getOverview();
+    tenantName = o.tenant?.name || tenantName;
+    Object.assign(brand, o.tenant?.branding || {});
+    counts = {
+      inbox: o.live.conversations_need_human || 0,
+      leads: o.live.open_leads || 0,
+      appointments: o.live.today_appointments || 0,
+      reactivation: o.live.active_reactivation_campaigns || 0
+    };
+  } catch {
+    /* offline — nav still renders */
+  }
+
+  let tenants: { id: string; name: string }[] = [];
+  if (connected) {
+    try { tenants = (await getTenants()).tenants; } catch { /* ignore */ }
+  }
+
+  const style = {
+    "--brand": brand.primary || "#6aa6ff",
+    "--accent": brand.accent || "#7cf2c8"
+  } as CSSProperties;
+
   return (
     <div className="shell" style={style}>
       <aside className="sidebar">
-        <Link href="/" className="wordmark"><span className="wordmark-mark">{initials[0]}</span>{brand.logoText || tenant.name}</Link>
-        <Nav />
+        <Link href="/" className="brand">
+          <span className="brand-mark">{(tenantName[0] || "A").toUpperCase()}</span>
+          <span>
+            <div className="brand-name">{tenantName}</div>
+            <div className="brand-sub">AI Receptionist</div>
+          </span>
+        </Link>
+
+        {tenants.length > 1 ? (
+          <form action={switchTenant} className="row" style={{ padding: "0 8px 6px", gap: 6 }}>
+            <select className="select" name="tenantId" defaultValue="" style={{ flex: 1 }}>
+              <option value="" disabled>Switch salon…</option>
+              {tenants.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <button className="btn sm" type="submit">Go</button>
+          </form>
+        ) : null}
+
+        <Nav counts={counts} />
+
         <div className="sidebar-foot">
-          <span className={`status-dot ${source === "api" ? "live" : "demo"}`} />
-          <span>{source === "api" ? "Live · verbunden" : "Demo · Beispieldaten"}</span>
-          {authRequired ? <form action="/api/logout" method="post"><button className="link-button" type="submit">Abmelden</button></form> : null}
+          <span className="pill-live">
+            <span className={`dot ${source === "api" ? "live" : ""}`} />
+            {source === "api" ? "Live · connected" : "Demo · snapshot"}
+          </span>
+          {authRequired ? (
+            <form action="/api/logout" method="post"><button className="link-btn" type="submit">Sign out</button></form>
+          ) : null}
         </div>
       </aside>
       <main className="content">{children}</main>

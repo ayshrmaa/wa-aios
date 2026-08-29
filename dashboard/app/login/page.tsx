@@ -9,12 +9,15 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return (
     <main className="login">
       <form className="login-card" action="/api/login" method="post">
-        <span className="label">Salon Performance</span>
-        <h1>Anmelden</h1>
-        <p>Das Dashboard ist nur für die Salonleitung. Bitte Passwort eingeben.</p>
-        <label>Passwort<input type="password" name="password" autoComplete="current-password" required autoFocus /></label>
-        {error ? <p className="form-error">Passwort ist nicht korrekt.</p> : null}
-        <button className="button-primary" type="submit">Anmelden</button>
+        <span className="eyebrow">AI Receptionist Platform</span>
+        <h1>Sign in</h1>
+        <p>This dashboard is for salon management. Enter the access password.</p>
+        <div className="field">
+          <label>Password</label>
+          <input className="input" type="password" name="password" autoComplete="current-password" required autoFocus />
+        </div>
+        {error ? <p className="form-error">That password is not correct.</p> : null}
+        <button className="btn primary" type="submit">Sign in</button>
       </form>
     </main>
   );

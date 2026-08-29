@@ -64,7 +64,7 @@ async function tool(name, body) {
 const requestedStart = zonedDateTime(nextTuesday(), "10:00", timezone).toISOString();
 const phone = "+41795550199";
 
-console.log("CALLER: Hi, I'd like to book a cut and finish with Mara.");
+console.log("CALLER: Hi, I'd like to book a cut and finish.");
 console.log("AGENT: Of course. Can I take your name?");
 console.log("CALLER: Sophie.");
 console.log("AGENT: Is the number you're calling from best for the reminder?");
@@ -76,8 +76,7 @@ console.log(`CALLER: ${requestedStart}.`);
 
 const availability = await tool("check_availability", {
   startTime: requestedStart,
-  serviceId: "cut-and-finish",
-  staffId: "mara"
+  serviceId: "cut-and-finish"
 });
 if (!availability.available && !availability.alternatives?.length) {
   throw new Error(`No bookable demo slot: ${availability.message}`);
@@ -89,14 +88,13 @@ console.log("CALLER: That works. Please book it.");
 const booking = await tool("book_appointment", {
   startTime: chosenStart,
   serviceId: "cut-and-finish",
-  staffId: "mara",
   customerName: "Sophie",
   customerPhone: phone,
   customerEmail: "sophie.demo@example.ch",
   notes: "Booked through demo-call.mjs"
 });
 if (booking.status !== "booked") throw new Error(`Booking failed: ${booking.message}`);
-console.log(`AGENT: You're booked in — Cut & Finish with ${booking.staff}, ${booking.startTime}.`);
+console.log(`AGENT: You're booked in — Cut & Finish, ${booking.startTime}.`);
 
 const found = await tool("find_appointment", { customerPhone: phone });
 if (!found.found || !found.appointments.some((item) => item.appointmentId === booking.appointmentId)) {

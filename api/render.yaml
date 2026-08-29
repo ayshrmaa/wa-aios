@@ -2,7 +2,7 @@ services:
   - type: web
     name: wa-aios-api
     runtime: node
-    plan: free
+    plan: starter
     buildCommand: cd api && npm ci
     startCommand: cd api && npm run migrate && npm start
     healthCheckPath: /health
@@ -12,14 +12,57 @@ services:
       - key: NODE_ENV
         value: production
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: wa-aios-db
+          property: connectionString
       - key: DATABASE_SSL
-        value: verify-full
-      - key: DATABASE_SSL_CA
-        sync: false
+        value: disable
+      # Bookings/availability use one shared Google Calendar
+      # (tenants.adapter_config.sharedCalendarId = "primary"). The three
+      # GOOGLE_OAUTH_* values are entered in the Render dashboard (sync: false);
+      # the API refuses to boot in google mode without them.
       - key: CALENDAR_PROVIDER
-        value: local
+        value: google
+      - key: GOOGLE_OAUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_OAUTH_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_OAUTH_REFRESH_TOKEN
+        sync: false
+      - key: MIGRATE_SEED
+        value: true
+      # Instagram/WhatsApp DM follow-ups go out through ManyChat. Enter
+      # MANYCHAT_API_KEY (ManyChat -> Settings -> API) in the Render dashboard;
+      # enter it in the SAME deploy that sets MESSAGE_TRANSPORT_INSTAGRAM=manychat,
+      # otherwise Instagram follow-up messages error instead of staying stubbed.
+      # Inbound (/webhook/manychat-lead) needs neither and is already live.
+      - key: MANYCHAT_API_KEY
+        sync: false
+      - key: MESSAGE_TRANSPORT_INSTAGRAM
+        value: manychat
+      # Real customer email (confirmations, reminders, follow-ups, reactivation).
+      # Create a Resend API key + verify the sending domain, then set both here.
+      - key: MESSAGE_TRANSPORT_EMAIL
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      # Conversational AI for inbound replies and reactivation copy. Optional:
+      # without it inbound threads route to a human and reactivation uses templates.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AIOS_AI_MODEL
+        value: claude-sonnet-5
+      # For multi-salon: comma-separated tenant UUIDs the dashboard token may read.
+      # Leave unset for a single-salon deployment (serves DEFAULT/TENANT_ID only).
+      - key: DASHBOARD_TENANT_IDS
+        sync: false
+      - key: RETELL_API_KEY
+        sync: false
       - key: RETELL_WEBHOOK_SECRET
+        generateValue: true
+      - key: DASHBOARD_API_TOKEN
         generateValue: true
       - key: TRUST_PROXY
         value: true
@@ -27,3 +70,7 @@ services:
         value: 120
       - key: RATE_LIMIT_WINDOW_MS
         value: 60000
+
+databases:
+  - name: wa-aios-db
+    plan: free

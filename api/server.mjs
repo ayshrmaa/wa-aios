@@ -2,13 +2,17 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { openDatabase } from "./src/database.mjs";
+import { openDatabase, DEFAULT_TENANT_ID } from "./src/database.mjs";
 import { createCalendar } from "./src/calendar.mjs";
 import { BookingService, tenantIdFromRequest } from "./src/booking-service.mjs";
 import { MessageDispatcher } from "./src/dispatcher.mjs";
 import { createTransport } from "./src/transport.mjs";
 import { LeadService } from "./src/leads.mjs";
-import { DashboardApi, DASHBOARD_ROUTES } from "./src/dashboard-api.mjs";
+import { DashboardApi, DASHBOARD_ROUTES, DASHBOARD_WRITE_ROUTES } from "./src/dashboard-api.mjs";
+import { createAiClient } from "./src/ai.mjs";
+import { ConversationService } from "./src/conversations.mjs";
+import { ReactivationService } from "./src/reactivation.mjs";
+import { RetellWebhookService, verifyRetellSignature } from "./src/retell-webhook.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,10 +26,13 @@ const routes = new Map([
   ["/webhook/log-complaint", "logComplaint"],
   ["/webhook/log-review-rating", "recordReviewRating"],
   ["/webhook/log-callback", "logCallback"],
+  ["/webhook/appointment-outcome", "markAppointmentOutcome"],
   // Service 4.1 — leads from the website form, ManyChat, the receptionist, or manual entry
   ["/webhook/lead", ["leads", "createLead"]],
   ["/webhook/manychat-lead", ["leads", "manychatLead"]],
-  ["/webhook/lead-status", ["leads", "updateLeadStatus"]]
+  ["/webhook/lead-status", ["leads", "updateLeadStatus"]],
+  // Inbound customer replies (SMS/WhatsApp/email/Instagram) → AI conversation handler
+  ["/webhook/inbound-message", ["conversations", "handleInbound"]]
 ]);
 
 function writeLog(logger, level, event, details = {}) {
@@ -48,7 +55,7 @@ function sendJson(response, statusCode, body) {
   response.end(payload);
 }
 
-async function readJson(request) {
+async function readRaw(request) {
   const chunks = [];
   let length = 0;
   for await (const chunk of request) {
@@ -56,12 +63,20 @@ async function readJson(request) {
     if (length > 1_000_000) throw Object.assign(new Error("The request was too large to process safely."), { statusCode: 413 });
     chunks.push(chunk);
   }
-  if (!chunks.length) return {};
+  return chunks.length ? Buffer.concat(chunks).toString("utf8") : "";
+}
+
+function parseJsonBody(raw) {
+  if (!raw) return {};
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return JSON.parse(raw);
   } catch {
     throw Object.assign(new Error("I could not understand that request. Please try again."), { statusCode: 400 });
   }
+}
+
+async function readJson(request) {
+  return parseJsonBody(await readRaw(request));
 }
 
 function requestIdFrom(request) {
@@ -139,9 +154,19 @@ export async function createRuntime(options = {}) {
     env
   });
   const service = new BookingService({ db: opened.db, calendar, env, logger });
-  const leads = new LeadService({ db: opened.db, tenantLoader: (id) => service.tenant(id), logger });
-  const dashboardApi = new DashboardApi({ db: opened.db });
-  const services = { booking: service, leads };
+  const loadTenant = (id) => service.tenant(id);
+  const leads = new LeadService({ db: opened.db, tenantLoader: loadTenant, logger });
+  const ai = options.ai ?? createAiClient({ env, logger });
+  const conversations = new ConversationService({
+    db: opened.db, bookingService: service, leadService: leads, ai, tenantLoader: loadTenant, logger
+  });
+  const reactivation = new ReactivationService({ db: opened.db, ai, tenantLoader: loadTenant, logger });
+  const retellWebhook = new RetellWebhookService({
+    db: opened.db, tenantLoader: loadTenant, leadService: leads, logger, env
+  });
+  const services = { booking: service, leads, conversations, reactivation };
+  const dashboardApi = new DashboardApi({ db: opened.db, services });
+  if (ai?.enabled) writeLog(logger, "info", "ai_enabled", { model: ai.model });
   const dashboardToken = String(env.DASHBOARD_API_TOKEN ?? "");
   if (!dashboardToken) {
     writeLog(logger, "warn", "dashboard_api_disabled", { message: "DASHBOARD_API_TOKEN is unset. /api/dashboard/* returns 503 until it is configured." });
@@ -159,6 +184,17 @@ export async function createRuntime(options = {}) {
     claimLeaseMs: options.messageClaimLeaseMs
   });
   const webhookSecret = String(env.RETELL_WEBHOOK_SECRET ?? "");
+  // Tenants the dashboard token is allowed to read. Defaults to the single
+  // deployment tenant; set DASHBOARD_TENANT_IDS to a comma list for multi-salon.
+  const dashboardTenantAllowList = new Set(
+    String(env.DASHBOARD_TENANT_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean)
+  );
+  const resolveDashboardTenant = (url, body = {}) => {
+    const fallback = env.TENANT_ID || DEFAULT_TENANT_ID;
+    const requested = body.tenantId || body.tenant_id || url.searchParams.get("tenantId");
+    if (!requested || requested === fallback) return fallback;
+    return dashboardTenantAllowList.has(requested) ? requested : fallback;
+  };
   const trustProxy = String(env.TRUST_PROXY ?? "false").toLowerCase() === "true";
   const rateLimitMaximum = positiveInteger(options.rateLimitMax ?? env.RATE_LIMIT_MAX, 120);
   const rateLimitWindowMs = positiveInteger(options.rateLimitWindowMs ?? env.RATE_LIMIT_WINDOW_MS, 60_000);
@@ -190,6 +226,7 @@ export async function createRuntime(options = {}) {
     messagingCycleRunning = true;
     try {
       const reviewRequestsScheduled = await service.sweepReviewRequests({ limit: 100 });
+      try { await reactivation.tick(); } catch (error) { writeLog(logger, "error", "reactivation_tick_failed", { message: error.message }); }
       const delivery = await dispatcher.runOnce();
       writeLog(logger, "info", "messaging_cycle_complete", { reviewRequestsScheduled, ...delivery });
       return { reviewRequestsScheduled, ...delivery };
@@ -250,6 +287,25 @@ export async function createRuntime(options = {}) {
         });
       }
 
+      // Retell's platform webhook (call_started / call_ended / call_analyzed).
+      // Authenticated by the Retell signature (HMAC of the raw body with the
+      // Retell API key) or, failing that, the shared webhook secret.
+      if (request.method === "POST" && url.pathname === "/webhook/retell") {
+        const raw = await readRaw(request);
+        const signature = request.headers["x-retell-signature"];
+        const retellApiKey = env.RETELL_API_KEY || "";
+        const signatureOk = verifyRetellSignature(raw, signature, retellApiKey);
+        const secretOk = webhookSecret && secretsMatch(webhookSecret, request.headers["x-retell-webhook-secret"]);
+        if (!signatureOk && !secretOk && (retellApiKey || webhookSecret)) {
+          writeLog(logger, "warn", "retell_webhook_auth_failed", { requestId, ip });
+          return sendJson(response, 401, { error: "unauthorized", requestId });
+        }
+        const payload = parseJsonBody(raw);
+        const tenantId = tenantIdFromRequest(payload, url, env);
+        const result = await retellWebhook.handle(tenantId, payload);
+        return sendJson(response, 200, { ...result, requestId });
+      }
+
       const isWebhook = url.pathname.startsWith("/webhook/");
       if (isWebhook && webhookSecret) {
         if (!secretsMatch(webhookSecret, request.headers["x-retell-webhook-secret"])) {
@@ -289,8 +345,24 @@ export async function createRuntime(options = {}) {
           writeLog(logger, "warn", "dashboard_auth_failed", { requestId, path: url.pathname, ip });
           return sendJson(response, 401, { error: "unauthorized", message: "Dashboard token is missing or wrong.", requestId });
         }
-        const tenantId = tenantIdFromRequest({}, url, env);
+        const tenantId = resolveDashboardTenant(url);
         return sendJson(response, 200, await dashboardApi[DASHBOARD_ROUTES.get(url.pathname)](tenantId, url));
+      }
+
+      if (request.method === "POST" && DASHBOARD_WRITE_ROUTES.has(url.pathname)) {
+        if (!dashboardToken) {
+          return sendJson(response, 503, { error: "dashboard_api_disabled", requestId });
+        }
+        const supplied = String(request.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+        if (!secretsMatch(dashboardToken, supplied)) {
+          writeLog(logger, "warn", "dashboard_auth_failed", { requestId, path: url.pathname, ip });
+          return sendJson(response, 401, { error: "unauthorized", message: "Dashboard token is missing or wrong.", requestId });
+        }
+        const writeBody = await readJson(request);
+        const tenantId = resolveDashboardTenant(url, writeBody);
+        const [targetName, handlerName] = DASHBOARD_WRITE_ROUTES.get(url.pathname);
+        const targetObject = targetName === "self" ? dashboardApi : services[targetName];
+        return sendJson(response, 200, await targetObject[handlerName](tenantId, writeBody));
       }
 
       const method = routes.get(url.pathname);

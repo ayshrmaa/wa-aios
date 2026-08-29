@@ -94,8 +94,7 @@ test("a website lead schedules the full ladder, first step within minutes, on th
   assert.match(msgs[0].body, /Nadia/);
   assert.match(msgs[0].body, /Balayage/);
   const runs = (await q(`select sequence_type, status from sequence_runs where contact_id = $1::uuid`, [out.contactId])).rows;
-  assert.equal(runs.filter((r) => r.sequence_type === "lead_follow_up").length, 3);
-  assert.equal(runs.filter((r) => r.sequence_type === "re_engagement").length, 2);
+  assert.equal(runs.filter((r) => r.sequence_type === "lead_follow_up").length, LEAD_LADDER.length);
   console.log(`EVIDENCE lead_ladder=${JSON.stringify(msgs.map((m) => ({ t: m.template_id, at: m.scheduled_for })))}`);
 });
 

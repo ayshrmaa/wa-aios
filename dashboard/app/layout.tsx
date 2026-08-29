@@ -9,13 +9,13 @@ const geist = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Salon Performance | WA AIOS",
-  description: "Owner dashboard for calls, bookings, no-shows, recovery and reviews."
+  title: "AIOS — AI Receptionist Platform",
+  description: "Calls, CRM, follow-ups, reactivation and analytics for your salon's AI receptionist."
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="de-CH">
+    <html lang="en">
       <body className={geist.variable}>{children}</body>
     </html>
   );
