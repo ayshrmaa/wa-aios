@@ -157,7 +157,12 @@ export async function main() {
     language: template.language || "multi",
     post_call_analysis_data: template.post_call_analysis_data ?? [],
     max_call_duration_ms: template.max_call_duration_ms ?? 600000,
-    interruption_sensitivity: template.interruption_sensitivity ?? 0.9
+    interruption_sensitivity: template.interruption_sensitivity ?? 0.9,
+    // Retell POSTs call_started / call_ended / call_analyzed here. The API
+    // ingests the recording URL, transcript and structured outcome.
+    webhook_url: `${apiBaseUrl}/webhook/retell`,
+    // Keep the recording + transcript so the dashboard can play/read them.
+    data_storage_setting: template.data_storage_setting || "everything"
   };
 
   const ids = await readIds(env);
