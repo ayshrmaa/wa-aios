@@ -3,8 +3,11 @@
 // post-call analysis. This is the source of truth for call records — the
 // in-call `call_summary` tool is a best-effort fallback only.
 //
-// Auth: X-Retell-Signature (HMAC-SHA256 of the raw body with the Retell API
-// key), or the shared x-retell-webhook-secret header.
+// Auth: the X-Retell-Signature header, verified with RETELL_API_KEY exactly as
+// retell-sdk's `Retell.verify` does — see verifyRetellSignature below. The
+// shared x-retell-webhook-secret is a fallback for our own tooling only; Retell
+// never sends it. RETELL_API_KEY must be the key that carries the "Webhook"
+// badge in the Retell dashboard.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { normalisePhone, firstNameOf } from "./leads.mjs";
@@ -26,13 +29,59 @@ const OUTCOME_MAP = {
   spam: "spam"
 };
 
-export function verifyRetellSignature(rawBody, signatureHeader, apiKey) {
-  if (!apiKey || !signatureHeader) return false;
-  const expected = createHmac("sha256", apiKey).update(rawBody, "utf8").digest("hex");
-  const provided = String(signatureHeader).replace(/^v=?/i, "").trim();
-  const a = Buffer.from(expected);
-  const b = Buffer.from(provided);
-  return a.length === b.length && timingSafeEqual(a, b);
+const RETELL_SIGNATURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+function safeEqualHex(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify a Retell webhook signature exactly as `retell-sdk`'s `Retell.verify`
+ * does (retell-sdk >= 5). The `X-Retell-Signature` header is
+ *
+ *     v=<unix_ms_timestamp>,d=<hmac_sha256_hex>
+ *
+ * where the digest is HMAC-SHA256, keyed with the Retell API key (the one
+ * carrying the "Webhook" badge in the Retell dashboard), over the string
+ * `<raw request body><timestamp>`. A ±5 minute timestamp window guards against
+ * replay. The legacy plain-hex format (HMAC of the body alone) is still
+ * accepted for older signers / local test tooling.
+ *
+ * `rawBody` MUST be the exact bytes received, not a re-serialised object.
+ *
+ * @returns {{ ok: boolean, scheme: "timestamped"|"legacy"|"none", reason?: string }}
+ */
+export function verifyRetellSignature(rawBody, signatureHeader, apiKey, { now = Date.now(), toleranceMs = RETELL_SIGNATURE_TOLERANCE_MS } = {}) {
+  if (!apiKey) return { ok: false, scheme: "none", reason: "RETELL_API_KEY is not set" };
+  const header = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
+  if (!header) return { ok: false, scheme: "none", reason: "missing x-retell-signature header" };
+  const signature = String(header).trim();
+
+  const timestamped = /^v=(\d{1,15}),d=([0-9a-f]{64})$/i.exec(signature);
+  if (timestamped) {
+    const timestampStr = timestamped[1];
+    const provided = timestamped[2].toLowerCase();
+    const timestamp = Number(timestampStr);
+    if (!Number.isSafeInteger(timestamp) || Math.abs(now - timestamp) > toleranceMs) {
+      return { ok: false, scheme: "timestamped", reason: "timestamp outside the 5-minute window" };
+    }
+    const expected = createHmac("sha256", apiKey).update(rawBody + timestampStr).digest("hex");
+    const ok = safeEqualHex(expected, provided);
+    return { ok, scheme: "timestamped", reason: ok ? undefined : "digest mismatch" };
+  }
+
+  if (/^[0-9a-f]{64}$/i.test(signature)) {
+    const expected = createHmac("sha256", apiKey).update(rawBody).digest("hex");
+    const ok = safeEqualHex(expected, signature.toLowerCase());
+    return { ok, scheme: "legacy", reason: ok ? undefined : "digest mismatch" };
+  }
+
+  return { ok: false, scheme: "none", reason: "unrecognised signature format" };
 }
 
 export class RetellWebhookService {

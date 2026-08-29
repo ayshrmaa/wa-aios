@@ -58,6 +58,9 @@ services:
       # Leave unset for a single-salon deployment (serves DEFAULT/TENANT_ID only).
       - key: DASHBOARD_TENANT_IDS
         sync: false
+      # REQUIRED for the Retell call webhook (/webhook/retell). Must be the
+      # Retell API key that carries the "Webhook" badge in the Retell dashboard —
+      # X-Retell-Signature is verified against it. Also used by retell/provision.mjs.
       - key: RETELL_API_KEY
         sync: false
       - key: RETELL_WEBHOOK_SECRET

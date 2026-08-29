@@ -18,7 +18,7 @@ Add these environment variables on the Render service (Environment tab), then
 | `MAIL_FROM` | `Atelier Nova <hello@your-verified-domain>` | Real customer email |
 | `MESSAGE_TRANSPORT_EMAIL` | `resend` | already in render.yaml |
 | `ANTHROPIC_API_KEY` | `sk-ant-…` | AI inbound replies + reactivation copy |
-| `RETELL_API_KEY` | your Retell key (already in `.env`) | Retell webhook signature check |
+| `RETELL_API_KEY` | the Retell key with the **"Webhook" badge** | Verifying `X-Retell-Signature` on `/webhook/retell` — **without this the webhook 401s** |
 
 Without `ANTHROPIC_API_KEY` the system still runs — inbound threads just route to a
 human and reactivation uses templates. Without Resend, messages are generated and
@@ -42,6 +42,26 @@ npm run retell:provision
 
 (Or set the webhook URL manually in the Retell dashboard → your agent → Webhook URL
 = `https://wa-aios-api.onrender.com/webhook/retell`.)
+
+**Check what's live:** `GET https://wa-aios-api.onrender.com/health` now returns
+`retellWebhookAuth` (`signature (RETELL_API_KEY)` once the key is set) and `commit`
+(the deployed git SHA — Render sets `RENDER_GIT_COMMIT`). `GET /webhook/retell`
+returns a readiness probe. A failed webhook now returns the reason in the **response
+body**, not just the log: `{ "reason": "digest mismatch" | "RETELL_API_KEY is not
+set" | "timestamp outside the 5-minute window" | ... }`.
+
+**Temporary unblock:** set `RETELL_WEBHOOK_VERIFY=false` to accept unverified Retell
+webhooks (logged as `retell_webhook_auth_skipped`) while sorting a key issue. Remove
+it once the signature verifies.
+
+**Signature auth.** Retell signs each webhook call with `X-Retell-Signature`
+(`v=<timestamp>,d=<hmac>`, verified against your Retell API key over the raw body,
+±5-minute replay window). The API verifies this exactly as `retell-sdk`'s
+`Retell.verify` does. You must set **`RETELL_API_KEY`** on Render to the key that
+shows the **"Webhook" badge** in the Retell dashboard (API Keys page). If it's
+missing or wrong, `/webhook/retell` returns 401 and the Render log line
+`retell_webhook_auth_failed` shows the reason (`RETELL_API_KEY is not set` /
+`digest mismatch` / `timestamp outside the 5-minute window`).
 
 After the next real call you'll see it on the dashboard **Calls** page with the
 recording, transcript and outcome; an unbooked enquiry also becomes a lead with the

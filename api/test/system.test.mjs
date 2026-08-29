@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import http from "node:http";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
@@ -10,6 +10,13 @@ import { createRuntime } from "../server.mjs";
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const webhookSecret = "system-test-secret";
 const dashboardToken = "system-test-dash";
+const retellApiKey = "key_system_test_webhook";
+
+/** Sign a body the way retell-sdk's Retell.verify expects: v=<ms>,d=<hmac(body+ms)>. */
+function retellSignature(body, apiKey = retellApiKey, ts = Date.now()) {
+  const digest = createHmac("sha256", apiKey).update(body + ts).digest("hex");
+  return `v=${ts},d=${digest}`;
+}
 let runtime;
 let socketPath;
 
@@ -77,7 +84,7 @@ before(async () => {
     calendarProvider: "local",
     databaseUrl: "",
     ai: stubAi,
-    env: { ...process.env, RETELL_WEBHOOK_SECRET: webhookSecret, DASHBOARD_API_TOKEN: dashboardToken, RATE_LIMIT_MAX: "999" },
+    env: { ...process.env, RETELL_WEBHOOK_SECRET: webhookSecret, RETELL_API_KEY: retellApiKey, DASHBOARD_API_TOKEN: dashboardToken, RATE_LIMIT_MAX: "999" },
     logger: { log() {}, error() {} }
   });
   await runtime.start();
@@ -123,6 +130,44 @@ test("Retell webhook: call_analyzed persists the recording, transcript and outco
     `select count(*)::int as n from messages where contact_id = $1::uuid and template_id like 'lead_%'`, [call.contact_id]
   )).rows[0].n;
   assert.ok(followUps >= 1, "an unbooked call becomes a lead with follow-ups");
+});
+
+test("Retell webhook: a valid X-Retell-Signature is accepted, a bad one is 401", async () => {
+  const callId = `call_${randomUUID()}`;
+  const body = JSON.stringify({
+    event: "call_analyzed",
+    call: {
+      call_id: callId, direction: "inbound", from_number: "+41794440777",
+      start_timestamp: Date.now() - 60_000, end_timestamp: Date.now(), duration_ms: 60_000,
+      transcript: "Agent: Hi\nUser: bye", recording_url: "https://rec.example/x.wav",
+      call_analysis: { call_summary: "quick call", custom_analysis_data: { outcome: "question_answered", disclosure_played: true } }
+    }
+  });
+
+  const good = await req("/webhook/retell", {
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), "x-retell-signature": retellSignature(body) },
+    body
+  });
+  assert.equal(good.status, 200, good.text);
+  assert.equal(JSON.parse(good.text).received, true);
+
+  const bad = await req("/webhook/retell", {
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), "x-retell-signature": `v=${Date.now()},d=${"0".repeat(64)}` },
+    body
+  });
+  assert.equal(bad.status, 401);
+
+  const stale = await req("/webhook/retell", {
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), "x-retell-signature": retellSignature(body, retellApiKey, Date.now() - 20 * 60_000) },
+    body
+  });
+  assert.equal(stale.status, 401, "a 20-minute-old signature is rejected as replay");
+
+  const call = (await q(`select retell_call_id from calls where retell_call_id = $1`, [callId])).rows[0];
+  assert.ok(call, "the signed call was persisted");
 });
 
 test("Inbound message stops the follow-up ladder the moment the customer replies", async () => {
