@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import pg from "pg";
 import { DEFAULT_TENANT_ID, postgresPoolConfig } from "../src/database.mjs";
+import { runMigrations } from "../../db/migrate-runner.mjs";
 
 const { Pool } = pg;
 
@@ -80,6 +81,12 @@ async function main() {
         extension: "btree_gist",
         exclusionConstraints: ["appointments", "booking_slot_locks", "local_calendar_events"]
       });
+
+      const migrations = await runMigrations(
+        { exec: (sql) => client.query(sql), query: (sql, params) => client.query(sql, params) },
+        { logger: { info: (line) => console.log(line) } }
+      );
+      log("incremental_migrations_complete", { applied: migrations.applied, total: migrations.total });
 
       if (wantsSeed()) {
         await client.query("select set_config('app.current_tenant_id', $1, false)", [DEFAULT_TENANT_ID]);

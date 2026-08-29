@@ -40,6 +40,26 @@ services:
         sync: false
       - key: MESSAGE_TRANSPORT_INSTAGRAM
         value: manychat
+      # Real customer email (confirmations, reminders, follow-ups, reactivation).
+      # Create a Resend API key + verify the sending domain, then set both here.
+      - key: MESSAGE_TRANSPORT_EMAIL
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      # Conversational AI for inbound replies and reactivation copy. Optional:
+      # without it inbound threads route to a human and reactivation uses templates.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AIOS_AI_MODEL
+        value: claude-sonnet-5
+      # For multi-salon: comma-separated tenant UUIDs the dashboard token may read.
+      # Leave unset for a single-salon deployment (serves DEFAULT/TENANT_ID only).
+      - key: DASHBOARD_TENANT_IDS
+        sync: false
+      - key: RETELL_API_KEY
+        sync: false
       - key: RETELL_WEBHOOK_SECRET
         generateValue: true
       - key: DASHBOARD_API_TOKEN

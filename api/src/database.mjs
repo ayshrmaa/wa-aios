@@ -3,6 +3,7 @@ import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { btree_gist } from "@electric-sql/pglite/contrib/btree_gist";
 import pg from "pg";
+import { runMigrations } from "../../db/migrate-runner.mjs";
 
 const { Pool } = pg;
 const tenantId = "11111111-1111-4111-8111-111111111111";
@@ -206,6 +207,7 @@ export async function openDatabase({
         throw new Error("The Postgres schema is not installed. Run npm run migrate before starting the API.");
       }
       await verifyConcurrencyGuarantees(db);
+      await runMigrations(db, { logger });
     } catch (error) {
       await db.close();
       throw error;
@@ -219,6 +221,7 @@ export async function openDatabase({
     db = new PGliteDatabase(database);
     seeded = await seedLocalDatabase(db, seed);
     await verifyConcurrencyGuarantees(db);
+    await runMigrations(db, { logger });
   }
 
   await db.query("select set_config('app.current_tenant_id', $1, false)", [env.TENANT_ID ?? tenantId]);
