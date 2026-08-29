@@ -43,6 +43,17 @@ npm run retell:provision
 (Or set the webhook URL manually in the Retell dashboard → your agent → Webhook URL
 = `https://wa-aios-api.onrender.com/webhook/retell`.)
 
+**Check what's live:** `GET https://wa-aios-api.onrender.com/health` now returns
+`retellWebhookAuth` (`signature (RETELL_API_KEY)` once the key is set) and `commit`
+(the deployed git SHA — Render sets `RENDER_GIT_COMMIT`). `GET /webhook/retell`
+returns a readiness probe. A failed webhook now returns the reason in the **response
+body**, not just the log: `{ "reason": "digest mismatch" | "RETELL_API_KEY is not
+set" | "timestamp outside the 5-minute window" | ... }`.
+
+**Temporary unblock:** set `RETELL_WEBHOOK_VERIFY=false` to accept unverified Retell
+webhooks (logged as `retell_webhook_auth_skipped`) while sorting a key issue. Remove
+it once the signature verifies.
+
 **Signature auth.** Retell signs each webhook call with `X-Retell-Signature`
 (`v=<timestamp>,d=<hmac>`, verified against your Retell API key over the raw body,
 ±5-minute replay window). The API verifies this exactly as `retell-sdk`'s
