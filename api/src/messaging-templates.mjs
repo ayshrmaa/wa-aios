@@ -3,6 +3,21 @@ import { formatSpoken } from "./time.mjs";
 
 const defaultTemplates = {
   "de-CH": {
+    appointment_confirmation: {
+      subject: "Ihr Termin bei {{salonName}} ist bestätigt",
+      body: "Guten Tag {{firstName}}, Ihr Termin für {{service}} bei {{staff}} am {{appointmentTime}} ist bestätigt. Wir freuen uns auf Sie bei {{salonName}}. Antworten Sie einfach auf diese Nachricht, falls sich etwas ändert.",
+      whatsapp: { name: "appointment_confirmation", bodyParameters: ["firstName", "service", "staff", "appointmentTime"] }
+    },
+    appointment_completion: {
+      subject: "Danke für Ihren Besuch bei {{salonName}}",
+      body: "Guten Tag {{firstName}}, danke, dass Sie heute für {{service}} bei uns waren. Wir hoffen, Sie sind rundum zufrieden. Bis zum nächsten Mal bei {{salonName}}.",
+      whatsapp: { name: "appointment_completion", bodyParameters: ["firstName", "service"] }
+    },
+    reactivation_intro: {
+      subject: "Wir würden Sie gern wiedersehen, {{firstName}}",
+      body: "Guten Tag {{firstName}}, es ist eine Weile her seit Ihrem letzten Besuch bei {{salonName}}{{lastServicePhrase}}. Wir haben aktuell wieder freie Termine — antworten Sie einfach, wenn Sie einen Platz möchten.{{offerPhrase}}",
+      whatsapp: { name: "reactivation_intro", bodyParameters: ["firstName", "lastServicePhrase", "offerPhrase"] }
+    },
     appointment_t_48h: {
       subject: "Ihr Termin bei {{salonName}} in zwei Tagen",
       body: "Guten Tag {{firstName}}, wir freuen uns auf Ihren Termin für {{service}} bei {{staff}} am {{appointmentTime}}. Falls etwas dazwischenkommt, melden Sie sich bitte rechtzeitig bei uns.",
@@ -53,6 +68,16 @@ const defaultTemplates = {
       body: "Guten Tag {{firstName}}, danke für Ihre Anfrage{{serviceInterestPhrase}}. Wir haben gerade freie Termine — antworten Sie mit Ihrem Wunschtag oder buchen Sie direkt: {{bookingUrl}}",
       whatsapp: { name: "lead_followup_instant", bodyParameters: ["firstName", "serviceInterestPhrase", "bookingUrl"] }
     },
+    lead_followup_10min: {
+      subject: "Wir sind für Sie da, {{firstName}}",
+      body: "Guten Tag {{firstName}}, wir wollten kurz sicherstellen, dass Ihre Anfrage{{serviceInterestPhrase}} bei uns angekommen ist. Schreiben Sie uns einfach Ihren Wunschtag, dann kümmern wir uns sofort darum.",
+      whatsapp: { name: "lead_followup_10min", bodyParameters: ["firstName", "serviceInterestPhrase"] }
+    },
+    lead_followup_2h: {
+      subject: "Noch da? Ihr Termin bei {{salonName}}",
+      body: "Guten Tag {{firstName}}, falls es vorhin nicht gepasst hat: Wir haben diese Woche noch Plätze frei{{serviceInterestPhrase}}. Ein kurzes Wort von Ihnen genügt und wir schlagen Ihnen passende Zeiten vor.",
+      whatsapp: { name: "lead_followup_2h", bodyParameters: ["firstName", "serviceInterestPhrase"] }
+    },
     lead_followup_day_1: {
       subject: "Noch Interesse an einem Termin?",
       body: "Guten Tag {{firstName}}, gestern haben Sie sich bei {{salonName}} gemeldet{{serviceInterestPhrase}}. Sollen wir Ihnen zwei, drei passende Zeiten vorschlagen? Einfach kurz antworten.",
@@ -80,6 +105,21 @@ const defaultTemplates = {
     }
   },
   en: {
+    appointment_confirmation: {
+      subject: "Your {{salonName}} appointment is confirmed",
+      body: "Hello {{firstName}}, your {{service}} appointment with {{staff}} on {{appointmentTime}} is confirmed. We look forward to seeing you at {{salonName}}. Just reply to this message if anything changes.",
+      whatsapp: { name: "appointment_confirmation", bodyParameters: ["firstName", "service", "staff", "appointmentTime"] }
+    },
+    appointment_completion: {
+      subject: "Thank you for visiting {{salonName}}",
+      body: "Hello {{firstName}}, thank you for coming in for {{service}} today. We hope you're delighted with the result. See you next time at {{salonName}}.",
+      whatsapp: { name: "appointment_completion", bodyParameters: ["firstName", "service"] }
+    },
+    reactivation_intro: {
+      subject: "We'd love to see you again, {{firstName}}",
+      body: "Hello {{firstName}}, it's been a while since your last visit to {{salonName}}{{lastServicePhrase}}. We have openings again — just reply if you'd like us to hold a spot for you.{{offerPhrase}}",
+      whatsapp: { name: "reactivation_intro", bodyParameters: ["firstName", "lastServicePhrase", "offerPhrase"] }
+    },
     appointment_t_48h: {
       subject: "Your {{salonName}} appointment is in two days",
       body: "Hello {{firstName}}, we look forward to seeing you for {{service}} with {{staff}} on {{appointmentTime}}. Please let us know in good time if your plans change.",
@@ -129,6 +169,16 @@ const defaultTemplates = {
       subject: "Your enquiry at {{salonName}}",
       body: "Hello {{firstName}}, thanks for getting in touch{{serviceInterestPhrase}}. We have openings right now — reply with a day that suits you, or book directly: {{bookingUrl}}",
       whatsapp: { name: "lead_followup_instant", bodyParameters: ["firstName", "serviceInterestPhrase", "bookingUrl"] }
+    },
+    lead_followup_10min: {
+      subject: "We're on it, {{firstName}}",
+      body: "Hello {{firstName}}, just making sure your enquiry{{serviceInterestPhrase}} reached us. Send us a day that suits you and we'll sort it straight away.",
+      whatsapp: { name: "lead_followup_10min", bodyParameters: ["firstName", "serviceInterestPhrase"] }
+    },
+    lead_followup_2h: {
+      subject: "Still there? Your {{salonName}} appointment",
+      body: "Hello {{firstName}}, if earlier wasn't a good time — we still have space this week{{serviceInterestPhrase}}. One word from you and we'll suggest some times.",
+      whatsapp: { name: "lead_followup_2h", bodyParameters: ["firstName", "serviceInterestPhrase"] }
     },
     lead_followup_day_1: {
       subject: "Still keen on an appointment?",
@@ -202,6 +252,12 @@ export function renderMessageTemplate({ tenant, templateId, contact = {}, appoin
     salonPhone: tenant.contact_config?.phone || "",
     serviceInterestPhrase: (lead.serviceInterest || appointment.service)
       ? (String(locale).startsWith("de") ? ` zu ${lead.serviceInterest || appointment.service}` : ` about ${lead.serviceInterest || appointment.service}`)
+      : "",
+    lastServicePhrase: lead.lastService
+      ? (String(locale).startsWith("de") ? ` (zuletzt ${lead.lastService})` : ` (last time: ${lead.lastService})`)
+      : "",
+    offerPhrase: lead.offer
+      ? (String(locale).startsWith("de") ? ` ${lead.offer}` : ` ${lead.offer}`)
       : ""
   };
   return {

@@ -306,12 +306,12 @@ test("f. find, reschedule, and cancel round trip leaves DB and calendar consiste
   console.log(`EVIDENCE f=${JSON.stringify({ booking, found, rescheduled, cancelled, database: state.rows[0] })}`);
 });
 
-test("g. the live no-show detector infers a booked appointment 30+ minutes past start", async () => {
+test("g. the outcome sweep completes a past-end booked appointment and rolls up the customer", async () => {
   const phone = "+41794440040";
   const call = await post("log-call", {
-    customerName: "No Show Fixture",
+    customerName: "Completion Fixture",
     customerPhone: phone,
-    summary: "Created the contact through the live endpoint before no-show detection.",
+    summary: "Created the contact through the live endpoint before the outcome sweep.",
     outcome: "question_answered",
     disclosurePlayed: true
   });
@@ -319,8 +319,8 @@ test("g. the live no-show detector infers a booked appointment 30+ minutes past 
   const contact = await runtime.db.query("select id::text from contacts where tenant_id = $1::uuid and phone_e164 = $2", [tenantId, phone]);
   const appointmentId = randomUUID();
   const externalId = `local-${randomUUID()}`;
-  const startsAt = new Date(Date.now() - 40 * 60_000).toISOString();
-  const endsAt = new Date(Date.now() + 20 * 60_000).toISOString();
+  const startsAt = new Date(Date.now() - 90 * 60_000).toISOString();
+  const endsAt = new Date(Date.now() - 30 * 60_000).toISOString();
   await runtime.db.transaction(async (tx) => {
     await tx.query(`
       insert into appointments (
@@ -331,20 +331,46 @@ test("g. the live no-show detector infers a booked appointment 30+ minutes past 
         $5::timestamptz, $6::timestamptz, 'Cut & Finish', 118, 'Lea', $7, 'call'
       )
     `, [appointmentId, tenantId, contact.rows[0].id, externalId, startsAt, endsAt, "lea.atelier-nova@calendar.demo"]);
-    await tx.query(`
-      insert into local_calendar_events (
-        tenant_id, external_id, calendar_id, starts_at, ends_at, summary
-      ) values ($1::uuid, $2, $3, $4::timestamptz, $5::timestamptz, 'No-show detector fixture')
-    `, [tenantId, externalId, "lea.atelier-nova@calendar.demo", startsAt, endsAt]);
   });
   const health = JSON.parse((await request(socketPath, "/health")).text);
   const state = await runtime.db.query(`
     select status, status_source,
-           (select count(*)::int from events where aggregate_id = $1::uuid and event_type = 'appointment.no_show_inferred') as audit_events
+           (select count(*)::int from events where aggregate_id = $1::uuid and event_type = 'appointment.completed_inferred') as audit_events
     from appointments where id = $1::uuid
   `, [appointmentId]);
-  assert.deepEqual(state.rows[0], { status: "no_show", status_source: "inferred", audit_events: 1 });
-  console.log(`EVIDENCE g=${JSON.stringify({ call, health, appointmentId, database: state.rows[0] })}`);
+  assert.deepEqual(state.rows[0], { status: "completed", status_source: "inferred", audit_events: 1 });
+  const rollup = await runtime.db.query(
+    "select completed_bookings, lifetime_value_chf::float8 as ltv from contacts where id = $1::uuid",
+    [contact.rows[0].id]
+  );
+  assert.equal(rollup.rows[0].completed_bookings, 1);
+  assert.equal(rollup.rows[0].ltv, 118);
+  console.log(`EVIDENCE g=${JSON.stringify({ call, health, appointmentId, database: state.rows[0], rollup: rollup.rows[0] })}`);
+});
+
+test("g2. an explicit no-show marks the appointment and starts the recovery ladder", async () => {
+  const phone = "+41794440041";
+  await post("log-call", { customerName: "No Show Fixture", customerPhone: phone, summary: "seed", outcome: "question_answered", disclosurePlayed: true });
+  const contact = await runtime.db.query("select id::text from contacts where tenant_id = $1::uuid and phone_e164 = $2", [tenantId, phone]);
+  const appointmentId = randomUUID();
+  await runtime.db.query(`
+    insert into appointments (
+      id, tenant_id, contact_id, external_id, platform, status, status_source,
+      starts_at, ends_at, service, value_chf, staff, staff_calendar_id, lead_source
+    ) values ($1::uuid, $2::uuid, $3::uuid, $4, 'local', 'booked', 'workflow',
+      $5::timestamptz, $6::timestamptz, 'Cut & Finish', 118, 'Lea', $7, 'call')
+  `, [appointmentId, tenantId, contact.rows[0].id, `local-${randomUUID()}`,
+      new Date(Date.now() - 3 * 3_600_000).toISOString(), new Date(Date.now() - 2 * 3_600_000).toISOString(),
+      "lea.atelier-nova@calendar.demo"]);
+  const res = await post("appointment-outcome", { appointmentId, outcome: "no_show" });
+  assert.equal(res.updated, true);
+  const state = await runtime.db.query("select status, status_source from appointments where id = $1::uuid", [appointmentId]);
+  assert.deepEqual(state.rows[0], { status: "no_show", status_source: "staff" });
+  const recovery = await runtime.db.query(
+    "select count(*)::int as n from sequence_runs where appointment_id = $1::uuid and sequence_type = 'no_show_recovery'",
+    [appointmentId]
+  );
+  assert.ok(recovery.rows[0].n >= 1);
 });
 
 test("h. reminder plans contain exact T-48h/T-24h/T-2h times and drop quiet-hours T-2h", async () => {
