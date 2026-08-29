@@ -67,20 +67,55 @@ After the next real call you'll see it on the dashboard **Calls** page with the
 recording, transcript and outcome; an unbooked enquiry also becomes a lead with the
 follow-up ladder.
 
-## 3. Deploy the dashboard (Vercel)
+## 3. Deploy the dashboard
 
-Set on the Vercel project:
+The dashboard (`dashboard/`, Next.js 15) is a **separate service** — it is not
+served by the API. `GET https://wa-aios-api.onrender.com/` returning `not_found`
+is expected; that host is the API only. Pick one of:
+
+Env vars (all three deploy targets need these):
 
 | Key | Value |
 |---|---|
 | `AIOS_API_URL` | `https://wa-aios-api.onrender.com` |
-| `DASHBOARD_API_TOKEN` | the value from Render → `wa-aios-api` → `DASHBOARD_API_TOKEN` (Reveal) |
+| `DASHBOARD_API_TOKEN` | Render → `wa-aios-api` → Environment → `DASHBOARD_API_TOKEN` → **Reveal**, copy the value |
 | `NEXT_PUBLIC_DEMO_TENANT_ID` | `11111111-1111-4111-8111-111111111111` |
 | `DASHBOARD_PASSWORD` | a login password for the salon owner |
 
-Redeploy. The dashboard is now the 10-section product: Overview, Inbox, Calls,
-Customers (+ 360), Leads, Appointments, Follow-ups, Reactivation, Analytics,
-Settings.
+### Option A — Vercel (recommended for Next.js: free, no cold starts)
+
+1. vercel.com → **Add New… → Project** → import `kash300705/wa-aios`.
+2. **Root Directory: `dashboard`** (Vercel auto-detects Next.js; `dashboard/vercel.json` pins the install command).
+3. Add the four env vars above → **Deploy**.
+4. URL: `https://<project>.vercel.app`.
+
+### Option B — Render Blueprint (everything in one place)
+
+`render.yaml` (repo root) now declares **`wa-aios-dashboard`** alongside the API.
+`DASHBOARD_API_TOKEN` is wired from the API service automatically (`fromService`).
+
+- If `wa-aios-api` is already on a Blueprint: Render → your Blueprint → **Sync** →
+  approve creating `wa-aios-dashboard`. Set `DASHBOARD_PASSWORD` on the new service.
+- If `wa-aios-api` was created manually (no root `render.yaml` existed before), use
+  Option A, or Option C.
+- URL: `https://wa-aios-dashboard.onrender.com`. It is on the **free** plan
+  (sleeps after 15 min idle); change `plan: free` → `starter` in `render.yaml`
+  for always-on.
+
+### Option C — Render, standalone service (no Blueprint)
+
+Render → **New → Web Service** → connect `kash300705/wa-aios`:
+- Root Directory: `dashboard`
+- Build: `npm ci --include=dev && npm run build`
+- Start: `npm run start -- -p $PORT`
+- Health Check Path: `/api/health`
+- Add the four env vars above.
+
+---
+
+The dashboard is the 10-section product: Overview, Inbox, Calls, Customers (+ 360),
+Leads, Appointments, Follow-ups, Reactivation, Analytics, Settings. Verify with
+`GET <dashboard-url>/api/health` → `{ "apiConfigured": true }`.
 
 ## 4. What each new piece does
 
