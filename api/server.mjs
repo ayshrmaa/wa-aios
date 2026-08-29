@@ -184,6 +184,13 @@ export async function createRuntime(options = {}) {
     claimLeaseMs: options.messageClaimLeaseMs
   });
   const webhookSecret = String(env.RETELL_WEBHOOK_SECRET ?? "");
+  const retellWebhookAuthMode = String(env.RETELL_WEBHOOK_VERIFY ?? "true").toLowerCase() === "false"
+    ? "disabled (RETELL_WEBHOOK_VERIFY=false)"
+    : env.RETELL_API_KEY
+      ? "signature (RETELL_API_KEY)"
+      : webhookSecret
+        ? "shared-secret-only — set RETELL_API_KEY for Retell's platform webhook"
+        : "unconfigured";
   // Tenants the dashboard token is allowed to read. Defaults to the single
   // deployment tenant; set DASHBOARD_TENANT_IDS to a comma list for multi-salon.
   const dashboardTenantAllowList = new Set(
@@ -292,31 +299,61 @@ export async function createRuntime(options = {}) {
       // RETELL_API_KEY (the key carrying the "Webhook" badge in Retell) over the
       // exact raw request body. The shared RETELL_WEBHOOK_SECRET is accepted as
       // a fallback for our own tooling only — Retell's platform never sends it.
-      if (request.method === "POST" && url.pathname === "/webhook/retell") {
+      if (url.pathname === "/webhook/retell") {
+        // GET: a readiness probe operators (and Retell's URL check) can hit.
+        if (request.method === "GET") {
+          return sendJson(response, 200, {
+            ok: true,
+            endpoint: "/webhook/retell",
+            auth: retellWebhookAuthMode,
+            expects: "POST with X-Retell-Signature (v=<ts>,d=<hmac>) verified against RETELL_API_KEY",
+            requestId
+          });
+        }
+        if (request.method !== "POST") return sendJson(response, 405, { error: "method_not_allowed", requestId });
+
         const raw = await readRaw(request);
         const retellApiKey = env.RETELL_API_KEY || "";
-        const signature = verifyRetellSignature(raw, request.headers["x-retell-signature"], retellApiKey);
+        const sigHeader = request.headers["x-retell-signature"];
+        const signature = verifyRetellSignature(raw, sigHeader, retellApiKey);
         const secretOk = Boolean(webhookSecret) && secretsMatch(webhookSecret, request.headers["x-retell-webhook-secret"]);
-        if (!signature.ok && !secretOk) {
+        // Explicit, operator-set escape hatch: RETELL_WEBHOOK_VERIFY=false accepts
+        // unverified calls (logged loudly) so the pipeline can be tested while a
+        // key issue is sorted out. Never leave this off in normal operation.
+        const verificationDisabled = String(env.RETELL_WEBHOOK_VERIFY ?? "true").toLowerCase() === "false";
+
+        if (!signature.ok && !secretOk && !verificationDisabled) {
+          const reason = retellApiKey ? signature.reason : "RETELL_API_KEY is not set on this service";
           writeLog(logger, "warn", "retell_webhook_auth_failed", {
             requestId,
             ip,
             hasApiKey: Boolean(retellApiKey),
-            hasSignatureHeader: Boolean(request.headers["x-retell-signature"]),
+            apiKeyPrefix: retellApiKey ? `${retellApiKey.slice(0, 8)}…` : null,
+            hasSignatureHeader: Boolean(sigHeader),
+            signatureHeaderSample: sigHeader ? String(Array.isArray(sigHeader) ? sigHeader[0] : sigHeader).slice(0, 14) : null,
             signatureScheme: signature.scheme,
-            reason: retellApiKey ? signature.reason : "RETELL_API_KEY is not set on this service",
+            reason,
             sharedSecretTried: Boolean(request.headers["x-retell-webhook-secret"])
           });
           return sendJson(response, 401, {
             error: "unauthorized",
             message: "Retell signature could not be verified.",
+            reason,
+            hasApiKey: Boolean(retellApiKey),
+            signatureScheme: signature.scheme,
             requestId
           });
         }
+        if (verificationDisabled && !signature.ok && !secretOk) {
+          writeLog(logger, "warn", "retell_webhook_auth_skipped", {
+            requestId, ip, note: "RETELL_WEBHOOK_VERIFY=false — accepting unverified Retell webhook"
+          });
+        }
+
         const payload = parseJsonBody(raw);
         const tenantId = tenantIdFromRequest(payload, url, env);
         const result = await retellWebhook.handle(tenantId, payload);
-        return sendJson(response, 200, { received: true, ...result, requestId });
+        return sendJson(response, 200, { received: true, verified: signature.ok || secretOk, ...result, requestId });
       }
 
       const isWebhook = url.pathname.startsWith("/webhook/");
@@ -344,7 +381,10 @@ export async function createRuntime(options = {}) {
           status: "ok",
           database: opened.driver,
           calendarProvider: calendar.provider,
+          retellWebhookAuth: retellWebhookAuthMode,
+          aiEnabled: Boolean(ai?.enabled),
           noShowsInferredThisRequest: inferred.length,
+          commit: env.RENDER_GIT_COMMIT ? env.RENDER_GIT_COMMIT.slice(0, 7) : null,
           requestId
         });
       }
