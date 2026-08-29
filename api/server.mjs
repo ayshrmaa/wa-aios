@@ -288,22 +288,35 @@ export async function createRuntime(options = {}) {
       }
 
       // Retell's platform webhook (call_started / call_ended / call_analyzed).
-      // Authenticated by the Retell signature (HMAC of the raw body with the
-      // Retell API key) or, failing that, the shared webhook secret.
+      // Primary auth is the Retell signature: X-Retell-Signature verified with
+      // RETELL_API_KEY (the key carrying the "Webhook" badge in Retell) over the
+      // exact raw request body. The shared RETELL_WEBHOOK_SECRET is accepted as
+      // a fallback for our own tooling only — Retell's platform never sends it.
       if (request.method === "POST" && url.pathname === "/webhook/retell") {
         const raw = await readRaw(request);
-        const signature = request.headers["x-retell-signature"];
         const retellApiKey = env.RETELL_API_KEY || "";
-        const signatureOk = verifyRetellSignature(raw, signature, retellApiKey);
-        const secretOk = webhookSecret && secretsMatch(webhookSecret, request.headers["x-retell-webhook-secret"]);
-        if (!signatureOk && !secretOk && (retellApiKey || webhookSecret)) {
-          writeLog(logger, "warn", "retell_webhook_auth_failed", { requestId, ip });
-          return sendJson(response, 401, { error: "unauthorized", requestId });
+        const signature = verifyRetellSignature(raw, request.headers["x-retell-signature"], retellApiKey);
+        const secretOk = Boolean(webhookSecret) && secretsMatch(webhookSecret, request.headers["x-retell-webhook-secret"]);
+        if (!signature.ok && !secretOk) {
+          writeLog(logger, "warn", "retell_webhook_auth_failed", {
+            requestId,
+            ip,
+            hasApiKey: Boolean(retellApiKey),
+            hasSignatureHeader: Boolean(request.headers["x-retell-signature"]),
+            signatureScheme: signature.scheme,
+            reason: retellApiKey ? signature.reason : "RETELL_API_KEY is not set on this service",
+            sharedSecretTried: Boolean(request.headers["x-retell-webhook-secret"])
+          });
+          return sendJson(response, 401, {
+            error: "unauthorized",
+            message: "Retell signature could not be verified.",
+            requestId
+          });
         }
         const payload = parseJsonBody(raw);
         const tenantId = tenantIdFromRequest(payload, url, env);
         const result = await retellWebhook.handle(tenantId, payload);
-        return sendJson(response, 200, { ...result, requestId });
+        return sendJson(response, 200, { received: true, ...result, requestId });
       }
 
       const isWebhook = url.pathname.startsWith("/webhook/");
