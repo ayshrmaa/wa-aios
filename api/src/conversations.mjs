@@ -85,7 +85,13 @@ export class ConversationService {
     if (!row && email) {
       row = (await client.query("select * from contacts where tenant_id = $1::uuid and lower(email) = $2", [tenantId, email])).rows[0] || null;
     }
-    if (row) return row;
+    if (row) {
+      if (name && (!row.first_name || row.first_name === "Gast")) {
+        await client.query("update contacts set first_name = $2, updated_at = now() where id = $1::uuid", [row.id, firstNameOf(name)]);
+        row.first_name = firstNameOf(name);
+      }
+      return row;
+    }
 
     if (!phone && !email && !subscriberId) throw clientError("An inbound message needs a phone, email, or subscriber id.");
     const source = body.channel === "instagram" ? "instagram" : body.channel === "whatsapp" ? "whatsapp" : phone ? "call" : "website";

@@ -1,182 +1,117 @@
-import type { CSSProperties } from "react";
+import Link from "next/link";
 import { getOverview } from "../../lib/api";
-import { fmt } from "../../lib/ui";
 import { calculateMetrics } from "../../lib/metrics";
-import type { SourceKey } from "../../lib/types";
+import { fmt, label } from "../../lib/format";
+import { Card, PageHead, Stat, BarList, Badge, Empty } from "../../lib/ui";
 
-const sourceLabels: Record<SourceKey, string> = {
-  call: "Anrufe",
-  instagram: "Instagram",
-  whatsapp: "WhatsApp",
-  website: "Website",
-  google: "Google"
-};
+export const dynamic = "force-dynamic";
 
-function formatInteger(value: number) {
-  return new Intl.NumberFormat("de-CH", { maximumFractionDigits: 0 }).format(value);
+const SOURCE_LABEL: Record<string, string> = { call: "Phone", instagram: "Instagram", whatsapp: "WhatsApp", website: "Website", google: "Google" };
+
+function activityText(row: { event_type: string; payload: Record<string, unknown>; first_name: string; last_name: string }) {
+  const who = [row.first_name, row.last_name].filter(Boolean).join(" ").trim();
+  const map: Record<string, string> = {
+    "appointment.created": "Appointment booked",
+    "appointment.cancelled": "Appointment cancelled",
+    "appointment.completed_inferred": "Appointment completed",
+    "appointment.no_show": "Marked no-show",
+    "lead.created": `New ${String(row.payload.channel || row.payload.source || "lead")} lead`,
+    "call.call_analyzed": `Call — ${label(String(row.payload.outcome || "inquiry"))}`,
+    "complaint.created": "Complaint logged",
+    "callback.requested": "Callback requested"
+  };
+  return { title: map[row.event_type] || label(row.event_type), who };
 }
 
-function formatPercent(value: number) {
-  return new Intl.NumberFormat("de-CH", { maximumFractionDigits: 1 }).format(value) + "%";
-}
-
-function formatChf(value: number) {
-  return new Intl.NumberFormat("de-CH", { style: "currency", currency: "CHF", maximumFractionDigits: 0 }).format(value);
-}
-
-function TrendLine({ points }: { points: { label: string; value: number | null }[] }) {
-  const valid = points.map((point, index) => ({ ...point, index })).filter((point): point is typeof point & { value: number } => point.value !== null);
-  if (!valid.length) return <div className="empty-chart">Noch keine Bewertungen in diesem Zeitraum.</div>;
-  const width = 620, height = 150, pad = 12;
-  const min = Math.max(1, Math.min(...valid.map((point) => point.value)) - 0.2);
-  const max = 5;
-  const coords = valid.map((point) => {
-    const x = pad + (point.index / Math.max(points.length - 1, 1)) * (width - pad * 2);
-    const y = pad + ((max - point.value) / Math.max(max - min, 0.1)) * (height - pad * 2);
-    return { ...point, x, y };
-  });
-  const path = coords.map((point, index) => `${index ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(" ");
-  return (
-    <div className="trend-wrap">
-      <svg className="trend-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Durchschnittliche Bewertung der letzten acht Wochen">
-        <path className="trend-area" d={`${path} L${coords.at(-1)!.x},${height - pad} L${coords[0].x},${height - pad} Z`} />
-        <path className="trend-line" d={path} />
-        {coords.map((point) => <circle key={`${point.label}-${point.index}`} cx={point.x} cy={point.y} r="4" />)}
-      </svg>
-      <div className="trend-labels">{points.map((point) => <span key={point.label}>{point.label}</span>)}</div>
-    </div>
-  );
-}
-
-export default async function DashboardPage() {
+export default async function OverviewPage() {
   const data = await getOverview();
-  const metrics = calculateMetrics(data.kpis);
-  const brand = data.tenant.branding || {};
-  const style = {
-    "--brand": brand.primary || "#173f35",
-    "--accent": brand.accent || "#d8ff73",
-    "--surface": brand.surface || "#f2f5f3",
-    "--ink": brand.ink || "#10231e"
-  } as CSSProperties;
-  const sourceEntries = Object.entries(metrics.bySource) as [SourceKey, { leads: number; bookings: number; conversion: number }][];
-  const maxLeads = Math.max(1, ...sourceEntries.map(([, value]) => value.leads));
-  const latestRating = [...metrics.ratingTrend].reverse().find((point) => point.value !== null)?.value || 0;
+  const m = calculateMetrics(data.kpis);
+  const live = data.live;
+  const sources = (Object.entries(m.bySource) as [string, { leads: number; bookings: number; conversion: number }][])
+    .filter(([, v]) => v.leads > 0 || v.bookings > 0);
+
+  const latestRating = [...m.ratingTrend].reverse().find((p) => p.value !== null)?.value ?? null;
+  const attention: { label: string; href: string; count: number }[] = [
+    { label: "Conversations need a human", href: "/inbox", count: live.conversations_need_human || 0 },
+    { label: "Open complaints", href: "/customers", count: live.open_complaints || 0 },
+    { label: "Open leads", href: "/leads", count: live.open_leads || 0 }
+  ].filter((a) => a.count > 0);
 
   return (
-    <main className="dashboard-shell" style={style}>
+    <>
+      <PageHead title={`Good day, ${data.tenant.name}`} lede="What your AI receptionist and automations are doing right now." />
 
-      <section className="intro">
-        <div>
-          <p className="label">Salon Performance</p>
-          <h1>Guten Morgen.</h1>
-          <p>Das ist die Wirkung Ihrer Rezeption und Nachfass-Automationen in diesem Monat.</p>
+      <div className="kpi-hero" style={{ marginBottom: 14 }}>
+        <div className="hero-panel">
+          <span className="eyebrow">Booked revenue ahead</span>
+          <div className="big">{fmt.chf(live.upcoming_revenue_chf || 0)}</div>
+          <p className="muted" style={{ margin: "6px 0 20px", maxWidth: "36ch" }}>
+            Confirmed appointments the receptionist has already booked into the calendar.
+          </p>
+          <div className="row" style={{ gap: 10 }}>
+            <div className="chip" style={{ padding: "8px 12px", fontSize: 13 }}><b>{fmt.int(live.upcoming_appointments)}</b>&nbsp;upcoming</div>
+            <div className="chip" style={{ padding: "8px 12px", fontSize: 13 }}><b>{fmt.int(live.today_appointments)}</b>&nbsp;today</div>
+            <div className="chip" style={{ padding: "8px 12px", fontSize: 13 }}><b>{fmt.int(m.callsAnswered)}</b>&nbsp;calls answered this month</div>
+          </div>
         </div>
-        <div className="period-control" aria-label="Aktiver Zeitraum">
-          <span>Zeitraum</span>
-          <strong>Dieser Monat</strong>
+        <div className="grid cols-2">
+          <Stat k="Bookings · month to date" v={fmt.int(m.bookingsCurrent)}
+            delta={m.bookingsChange === null ? undefined : { value: m.bookingsChange, suffix: "vs last month" }}
+            foot={`Prev ${fmt.int(m.bookingsPrevious)}`} />
+          <Stat k="Calls answered" v={fmt.pct(m.answeredRate)} foot={`${m.callsAnswered} of ${m.callsTotal}`} />
+          <Stat k="No-show rate" v={fmt.pct(m.noShowRate)} foot={`${m.noShows} of ${m.appointmentsDue} due`} />
+          <Stat k="Rating" v={latestRating ? latestRating.toFixed(1) : "—"} foot={`${m.reviewsReceived} reviews`} />
         </div>
-      </section>
+      </div>
 
-      <section className="live-strip" aria-label="Jetzt">
-        <article><span>Termine heute</span><strong>{fmt.int(data.live.today_appointments)}</strong></article>
-        <article><span>Bevorstehend</span><strong>{fmt.int(data.live.upcoming_appointments)}</strong></article>
-        <article><span>Offene Leads</span><strong>{fmt.int(data.live.open_leads)}</strong></article>
-        <article className={data.live.open_complaints ? "alert" : undefined}><span>Offene Beschwerden</span><strong>{fmt.int(data.live.open_complaints)}</strong></article>
-        <article><span>Nachrichten geplant</span><strong>{fmt.int(data.live.queued_messages)}</strong></article>
-        <article><span>Anrufe, 7 Tage</span><strong>{fmt.int(data.live.calls_7d)}</strong></article>
-      </section>
-      <section className="hero-metrics" aria-label="Monatliche Kernzahlen">
-        <article className="metric-panel bookings-panel">
-          <div className="metric-head"><span>Buchungen</span><span>Monat bis heute</span></div>
-          <div className="metric-primary">{formatInteger(metrics.bookingsCurrent)}</div>
-          <div className="metric-footer">
-            <span className={metrics.bookingsChange !== null && metrics.bookingsChange >= 0 ? "positive" : "negative"}>
-              {metrics.bookingsChange === null ? "Keine Vergleichsbasis" : `${metrics.bookingsChange >= 0 ? "+" : ""}${formatPercent(metrics.bookingsChange)}`}
-            </span>
-            <span>Vormonat {formatInteger(metrics.bookingsPrevious)}</span>
-          </div>
-          <p className="comparison-basis">{metrics.bookingsComparisonLabel}</p>
-        </article>
+      <div className="grid cols-4" style={{ marginBottom: 14 }}>
+        <Stat k="Customers" v={fmt.int(live.total_customers || 0)} />
+        <Stat k="Open leads" v={fmt.int(live.open_leads)} />
+        <Stat k="Messages queued" v={fmt.int(live.queued_messages)} />
+        <Stat k="Calls · 7 days" v={fmt.int(live.calls_7d)} />
+      </div>
 
-        <article className="metric-panel calls-panel">
-          <div className="metric-head"><span>Anrufe</span><span>Ziel 100% beantwortet</span></div>
-          <div className="call-ratio">
-            <strong>{formatPercent(metrics.answeredRate)}</strong>
-            <div className="ring" style={{ "--value": `${metrics.answeredRate * 3.6}deg` } as CSSProperties}><span>{metrics.callsTotal}</span></div>
-          </div>
-          <div className="split-stats"><span><b>{metrics.callsAnswered}</b> beantwortet</span><span><b>{metrics.callsMissed}</b> verpasst</span></div>
-        </article>
-      </section>
+      <div className="grid cols-2">
+        <Card title="Recent activity" action={<Link className="btn sm ghost" href="/analytics">Analytics →</Link>}>
+          {data.activity.length ? (
+            <div className="timeline">
+              {data.activity.map((row, i) => {
+                const t = activityText(row);
+                return (
+                  <div className="tl-item" key={i}>
+                    <div className="dotcol"><span className="tl-dot" />{i < data.activity.length - 1 ? <span className="tl-line" /> : null}</div>
+                    <div className="tl-body">
+                      {t.title}{t.who ? <span className="muted"> · {t.who}</span> : null}
+                      <div className="tl-time">{fmt.rel(row.occurred_at)}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <Empty>No activity recorded yet.</Empty>}
+        </Card>
 
-      <section className="metric-strip" aria-label="No-shows und Umsatzrueckgewinnung">
-        <article>
-          <span className="label">No-show Rate</span>
-          <strong>{formatPercent(metrics.noShowRate)}</strong>
-          <p>{metrics.noShows} von {metrics.appointmentsDue} Terminen</p>
-        </article>
-        <article>
-          <span className="label">Recovery Rate</span>
-          <strong>{formatPercent(metrics.recoveryRate)}</strong>
-          <p>{metrics.noShowRecoveries} von {metrics.noShows} No-shows zurueckgewonnen</p>
-        </article>
-        <article className="revenue-stat">
-          <span className="label">Geschaetzter rueckgewonnener Umsatz</span>
-          <strong>{formatChf(metrics.recoveredRevenue)}</strong>
-          <p>Schätzwert: {metrics.recoveredAppointments} Termine x {formatChf(data.tenant.avg_appointment_value_chf)}</p>
-        </article>
-      </section>
-
-      <section className="detail-grid">
-        <article className="detail-panel source-panel">
-          <div className="section-title">
-            <h2>Wo neue Leads entstehen</h2>
-            <p>Leads und Buchungen pro Quelle im aktuellen Monat.</p>
-          </div>
-          <div className="source-list">
-            {sourceEntries.map(([source, value]) => (
-              <div className="source-row" key={source}>
-                <span>{sourceLabels[source]}</span>
-                <div className="bar-track"><i style={{ width: `${Math.max(4, (value.leads / maxLeads) * 100)}%` }} /></div>
-                <b>{value.leads}</b>
+        <div className="stack">
+          {attention.length ? (
+            <Card title="Needs attention">
+              <div className="stack" style={{ gap: 8 }}>
+                {attention.map((a) => (
+                  <Link key={a.href + a.label} href={a.href} className="spread" style={{ padding: "8px 0" }}>
+                    <span>{a.label}</span>
+                    <span className="badge warn">{a.count}</span>
+                  </Link>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="source-legend"><span>Leads nach Quelle</span><span>{formatInteger(sourceEntries.reduce((total, [, value]) => total + value.leads, 0))} gesamt</span></div>
-        </article>
+            </Card>
+          ) : null}
 
-        <article className="detail-panel conversion-panel">
-          <div className="section-title"><h2>Conversion pro Quelle</h2><p>Anteil der Leads mit einer Buchung.</p></div>
-          <div className="conversion-list">
-            {sourceEntries.map(([source, value]) => (
-              <div key={source}>
-                <span>{sourceLabels[source]}</span>
-                <strong>{formatPercent(value.conversion)}</strong>
-                <small>{value.bookings} Buchungen</small>
-              </div>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <section className="reviews-section">
-        <article className="reviews-summary">
-          <p className="label">Bewertungen</p>
-          <h2>{latestRating ? latestRating.toFixed(1) : "-"}<span>/ 5</span></h2>
-          <div className="review-counts">
-            <span><b>{metrics.reviewsRequested}</b> angefragt</span>
-            <span><b>{metrics.reviewsReceived}</b> erhalten</span>
-          </div>
-        </article>
-        <article className="rating-trend">
-          <div className="section-title"><h2>Bewertungstrend</h2><p>Gewichteter Wochendurchschnitt der letzten acht Wochen.</p></div>
-          <TrendLine points={metrics.ratingTrend} />
-        </article>
-      </section>
-
-      <footer>
-        <span>{data.tenant.name}</span>
-        <span>Datenstand {data.kpis.at(-1)?.kpi_date || "-"}</span>
-      </footer>
-    </main>
+          <Card title="Where leads come from" sub="This month">
+            {sources.length ? (
+              <BarList items={sources.map(([k, v]) => ({ label: SOURCE_LABEL[k] || k, value: v.leads, hint: `${v.leads} · ${fmt.pct(v.conversion)} booked` }))} />
+            ) : <Empty>No leads this month yet.</Empty>}
+          </Card>
+        </div>
+      </div>
+    </>
   );
 }
